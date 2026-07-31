@@ -1,4 +1,13 @@
-import { ArcRotateCamera, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
+import {
+  ArcRotateCamera,
+  Color3,
+  Engine,
+  HemisphericLight,
+  MeshBuilder,
+  Scene,
+  StandardMaterial,
+  Vector3,
+} from "@babylonjs/core";
 import { loadAnimationClip, loadCharacter, loadEquipment } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
 import { exportCharacter } from "../core/exporter";
@@ -35,6 +44,12 @@ const camera = new ArcRotateCamera(
 camera.attachControl(canvas, true);
 
 new HemisphericLight("light", new Vector3(0, 1, 0), scene);
+
+const ground = MeshBuilder.CreateGround("ground", { width: 10, height: 10 }, scene);
+const groundMaterial = new StandardMaterial("groundMaterial", scene);
+groundMaterial.diffuseColor = new Color3(0.5, 0.5, 0.5);
+groundMaterial.specularColor = Color3.Black();
+ground.material = groundMaterial;
 
 async function main() {
   const character = await loadCharacter(scene, "/characters/", CHARACTER_FILE);
