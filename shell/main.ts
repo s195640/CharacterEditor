@@ -13,7 +13,7 @@ import {
 import type { AbstractMesh } from "@babylonjs/core";
 import { loadAnimationClip, loadCharacter, loadEquipment, loadProp } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
-import { scaleBodyPart } from "../core/bodyShape";
+import { getBoneNode, scaleBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
 import { createControlPanel } from "./ui";
 
@@ -178,6 +178,29 @@ async function main() {
     const state = bodyPartState[label];
     scaleBodyPart(character.skeletons[0], BODY_PART_BONES[label], state.length, state.width);
   };
+
+  // Legs hang downward from the hips, so lengthening them (like any other
+  // body part) pushes the feet further away from the hips -- i.e. further
+  // down, through the ground -- instead of making the character taller with
+  // feet still planted. Compensate by raising the whole character so the
+  // foot returns to its original ground-contact height.
+  //
+  // This is measured directly, not derived from a formula: a first attempt
+  // computed the expected added length from rest-pose bone offsets times the
+  // hips' absoluteScaling, which turned out unreliable for a bone-linked
+  // TransformNode (it read back a bare 1 instead of the real parent-chain
+  // scale at rest, and didn't scale proportionally once actually stretched --
+  // confirmed by comparing the predicted vs. actual foot-drop across several
+  // slider values, which diverged non-linearly instead of matching). Reading
+  // the foot's actual world position and cancelling out whatever the leg
+  // stretch just did to it sidesteps needing that number to be right at all.
+  const leftToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:LeftToeBase");
+  const baselineFootY = leftToeBaseNode.getAbsolutePosition().y;
+  const updateLegHeightCompensation = () => {
+    const uncompensatedFootY = leftToeBaseNode.getAbsolutePosition().y - character.rootNode.position.y;
+    character.rootNode.position.y = baselineFootY - uncompensatedFootY;
+  };
+
   // The retargeted animations' baked glTF data apparently includes a
   // constant scale=1 track on every bone (Mixamo/Blender bake full TRS
   // keyframes even for channels that never change), which silently
@@ -188,6 +211,7 @@ async function main() {
     for (const label of Object.keys(BODY_PART_BONES)) {
       applyBodyPart(label);
     }
+    updateLegHeightCompensation();
   });
 
   const handleExport = async () => {
