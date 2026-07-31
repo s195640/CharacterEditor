@@ -1,0 +1,19 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {},
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Git: Push",
+        "type": "shell",
+        "command": "git add -A; if ($?) { $ver = (Get-Content VERSION).Trim(); git commit -m ('Release version {0}' -f $ver) }; if ($?) { git push }",
+        "problemMatcher": []
+      },
+    ]
+  }
+}
