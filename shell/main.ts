@@ -13,6 +13,7 @@ import {
 import type { AbstractMesh } from "@babylonjs/core";
 import { loadAnimationClip, loadCharacter, loadEquipment, loadProp } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
+import { scaleBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
 import { createControlPanel } from "./ui";
 
@@ -38,6 +39,23 @@ interface EquippableItem {
   meshes: AbstractMesh[];
   equipped: boolean;
 }
+
+const BODY_PART_BONES: Record<string, string[]> = {
+  Arms: [
+    "mixamorig:LeftArm",
+    "mixamorig:LeftForeArm",
+    "mixamorig:RightArm",
+    "mixamorig:RightForeArm",
+  ],
+  Legs: [
+    "mixamorig:LeftUpLeg",
+    "mixamorig:LeftLeg",
+    "mixamorig:RightUpLeg",
+    "mixamorig:RightLeg",
+  ],
+  Head: ["mixamorig:Head"],
+  Belly: ["mixamorig:Spine1"],
+};
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const engine = new Engine(canvas, true);
@@ -153,6 +171,25 @@ async function main() {
     character.rootNode.scaling = baseScale.scale(value);
   };
 
+  const bodyPartState = Object.fromEntries(
+    Object.keys(BODY_PART_BONES).map((label) => [label, { length: 1, width: 1 }]),
+  );
+  const applyBodyPart = (label: string) => {
+    const state = bodyPartState[label];
+    scaleBodyPart(character.skeletons[0], BODY_PART_BONES[label], state.length, state.width);
+  };
+  // The retargeted animations' baked glTF data apparently includes a
+  // constant scale=1 track on every bone (Mixamo/Blender bake full TRS
+  // keyframes even for channels that never change), which silently
+  // overwrites any manual bone scaling within a frame or two. Reapplying
+  // every frame, after the animation system has run, makes our override win
+  // instead of fighting it once at slider-input time.
+  scene.onBeforeRenderObservable.add(() => {
+    for (const label of Object.keys(BODY_PART_BONES)) {
+      applyBodyPart(label);
+    }
+  });
+
   const handleExport = async () => {
     const result = await exportCharacter(scene, {
       sourceCharacter: CHARACTER_FILE,
@@ -176,6 +213,17 @@ async function main() {
     },
     onToggleSun: () => setSunEnabled(!sunEnabled),
     onSizeChange: (value) => setSize(value),
+    bodyParts: Object.keys(BODY_PART_BONES).map((label) => ({
+      label,
+      onLengthChange: (value: number) => {
+        bodyPartState[label].length = value;
+        applyBodyPart(label);
+      },
+      onWidthChange: (value: number) => {
+        bodyPartState[label].width = value;
+        applyBodyPart(label);
+      },
+    })),
   });
   equippables.forEach((item) => setEquippableState(item, false));
 
