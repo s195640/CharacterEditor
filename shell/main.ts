@@ -274,6 +274,7 @@ async function main() {
     equippables.forEach((item) => setEquippableState(item, false));
     setSunEnabled(true);
     animationController.play();
+    animationController.setSpeed(1);
     panel.resetControls();
   };
 
@@ -300,6 +301,7 @@ async function main() {
     },
     onToggleSun: () => setSunEnabled(!sunEnabled),
     onSizeChange: (value) => setSize(value),
+    onSpeedChange: (value) => animationController.setSpeed(value),
     onReset: () => resetAll(),
     bodyParts: Object.keys(BODY_PART_BONES).map((label) => ({
       label,

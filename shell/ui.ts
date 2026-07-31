@@ -18,6 +18,7 @@ export interface ControlPanelOptions {
   onSizeChange: (value: number) => void;
   bodyParts: BodyPartOptions[];
   onReset: () => void;
+  onSpeedChange: (value: number) => void;
 }
 
 export interface ControlPanel {
@@ -68,6 +69,9 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
     button.addEventListener("click", () => options.onSelectAnimation(name));
     panel.appendChild(button);
   }
+
+  const speedSlider = createLabeledSlider("Speed", options.onSpeedChange);
+  panel.appendChild(speedSlider.row);
 
   const equipmentHeading = document.createElement("h2");
   equipmentHeading.textContent = "Equipment";
@@ -148,6 +152,7 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
 
   const resetControls = (): void => {
     sizeSlider.value = "1";
+    speedSlider.slider.value = "1";
     for (const sliders of bodyPartSliders) {
       sliders.length.value = "1";
       sliders.width.value = "1";

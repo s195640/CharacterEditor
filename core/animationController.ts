@@ -32,6 +32,14 @@ export class AnimationController {
     this.groups.forEach((g) => g.stop());
   }
 
+  // Set on every group, not just the currently playing one: AnimationGroup's
+  // own play() reads its own stored speedRatio when (re)starting, so setting
+  // it on all groups up front means switching animations later (play/next)
+  // keeps the chosen speed without needing to reapply it per switch.
+  setSpeed(ratio: number): void {
+    this.groups.forEach((g) => (g.speedRatio = ratio));
+  }
+
   list(): string[] {
     return this.groups.map((g) => g.name);
   }

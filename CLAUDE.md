@@ -175,7 +175,12 @@ second consumer exists yet to justify one):
   keeps tracking proportionally if the character is rescaled afterward),
   `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
-  clips, `stop()`, `list()`), `bodyShape.ts` (`getBoneNode(skeleton, name)` —
+  clips, `stop()`, `list()`, `setSpeed(ratio)` sets `speedRatio` on every
+  group, not just the currently playing one — `AnimationGroup.play()` reads
+  its own stored `speedRatio` when (re)starting, so setting it on all groups
+  up front means switching animations afterward (GUI button, spacebar)
+  keeps the chosen speed without reapplying it per switch), `bodyShape.ts`
+  (`getBoneNode(skeleton, name)` —
   shared lookup, throws if the bone or its linked `TransformNode` is missing;
   `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
   scaling each named bone's node — Y is the bone-length axis and X/Z are
@@ -237,9 +242,11 @@ second consumer exists yet to justify one):
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
   animations) and `E` (toggle helmet) listeners, and call into `core/`.
   `ui.ts` + `ui.css` — the right-side control panel (`createControlPanel`):
-  plain DOM, no framework, one button per loaded animation, one toggle button
-  per item in a caller-supplied `equipmentItems` list, a Size slider
-  (0.5–2.0), and an Export button; `main.ts` keeps an `equippables` list
+  plain DOM, no framework, one button per loaded animation, a Speed slider
+  (0.5–2.0, same range/style as Size and Body Shape) right below the
+  animation buttons calling `animationController.setSpeed` on input, one
+  toggle button per item in a caller-supplied `equipmentItems` list, a Size
+  slider (0.5–2.0), and an Export button; `main.ts` keeps an `equippables` list
   (currently Helmet, Right Sword, Left Sword) and a single
   `setEquippableState` function so every toggle path (GUI button or the `E`
   key) stays in sync. Sizing: `main.ts` captures `character.rootNode.scaling`
