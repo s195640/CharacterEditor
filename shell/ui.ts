@@ -9,6 +9,7 @@ export interface ControlPanelOptions {
   equipmentItems: EquipmentItemOptions[];
   onExport: () => void;
   onToggleSun: () => void;
+  onSizeChange: (value: number) => void;
 }
 
 export interface ControlPanel {
@@ -42,6 +43,19 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
     panel.appendChild(button);
     equipButtons.set(item.label, button);
   }
+
+  const sizeHeading = document.createElement("h2");
+  sizeHeading.textContent = "Size";
+  panel.appendChild(sizeHeading);
+
+  const sizeSlider = document.createElement("input");
+  sizeSlider.type = "range";
+  sizeSlider.min = "0.5";
+  sizeSlider.max = "2";
+  sizeSlider.step = "0.1";
+  sizeSlider.value = "1";
+  sizeSlider.addEventListener("input", () => options.onSizeChange(Number(sizeSlider.value)));
+  panel.appendChild(sizeSlider);
 
   const lightingHeading = document.createElement("h2");
   lightingHeading.textContent = "Lighting";
