@@ -147,15 +147,21 @@ second consumer exists yet to justify one):
 - `core/` — Core logic. `characterLoader.ts` (`loadCharacter` loads a character
   via Babylon's `SceneLoader`; `loadAnimationClip` retargets an animation-only
   glTF onto an already-loaded skeleton via `ImportAnimationsAsync`, matching
-  targets by node name), `animationController.ts` (wraps `AnimationGroup[]` —
-  `play(name?)`, `next()` to cycle through all loaded clips, `stop()`, `list()`),
-  `types.ts`. Operates on Babylon `Scene`/`AnimationGroup` objects (the rendering
-  engine is a locked architectural decision, not "app UI") but has no DOM/UI-panel
-  code and no assumptions about how it's hosted.
+  targets by node name; `loadEquipment` loads a skinned equipment mesh and
+  rebinds it onto an already-loaded skeleton, discarding the duplicate
+  skeleton the glTF brings with it — only correct if the equipment was
+  authored against the same bone hierarchy/order, see
+  `tools/make_equipment_placeholder.py`), `animationController.ts` (wraps
+  `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
+  clips, `stop()`, `list()`), `types.ts`. Operates on Babylon
+  `Scene`/`AnimationGroup` objects (the rendering engine is a locked
+  architectural decision, not "app UI") but has no DOM/UI-panel code and no
+  assumptions about how it's hosted.
 - `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
-  Babylon `Engine`/camera/light, and render loop, wire up a spacebar listener to
-  cycle animations, and call into `core/`. `shell/public/characters/*.glb` —
-  converted character/animation assets, served as static files by Vite.
+  Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
+  animations) and `E` (toggle equipment) listeners, and call into `core/`.
+  `shell/public/characters/*.glb` — converted character/animation/equipment
+  assets, served as static files by Vite.
 - `assets/source/` — raw Mixamo FBX exports, kept for reproducibility of the
   conversion step.
 - `tools/convert_fbx_to_glb.py` — headless Blender script (`bpy`) that imports an
@@ -164,6 +170,12 @@ second consumer exists yet to justify one):
   makes Babylon's animation-group loading collide/overwrite unless renamed), and
   exports GLB with animations; run via
   `blender --background --python tools/convert_fbx_to_glb.py -- <in.fbx> <out.glb> <clip_name>`.
+- `tools/make_equipment_placeholder.py` — headless Blender script that imports
+  a reference FBX to get the exact armature (reusing it, rather than creating
+  a new one, guarantees the same bone order as the character), creates a small
+  sphere at a given bone's rest position, skins it 100% to that bone, and
+  exports mesh + full armature as GLB; run via
+  `blender --background --python tools/make_equipment_placeholder.py -- <ref.fbx> <out.glb> <bone_name>`.
 - `docs/milestones/` — established (see Versioning & Milestone Summaries above).
 - Root: `package.json`, `tsconfig.json`, `vite.config.ts` (`root: 'shell'`).
 
