@@ -161,8 +161,13 @@ second consumer exists yet to justify one):
 - `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
   animations) and `E` (toggle equipment) listeners, and call into `core/`.
-  `shell/public/characters/*.glb` — converted character/animation/equipment
-  assets, served as static files by Vite.
+  `ui.ts` + `ui.css` — the right-side control panel (`createControlPanel`):
+  plain DOM, no framework, one button per loaded animation plus an
+  equip/remove toggle; `main.ts` keeps a single `setEquipped` function that
+  both the `E` key and the panel button call, so the button label stays
+  correct regardless of which one triggered it. `shell/public/characters/*.glb`
+  — converted character/animation/equipment assets, served as static files by
+  Vite.
 - `assets/source/` — raw Mixamo FBX exports, kept for reproducibility of the
   conversion step.
 - `tools/convert_fbx_to_glb.py` — headless Blender script (`bpy`) that imports an
