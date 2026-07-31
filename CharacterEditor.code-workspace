@@ -14,6 +14,36 @@
         "command": "git add -A; if ($?) { $ver = (Get-Content VERSION).Trim(); git commit -m ('Release version {0}' -f $ver) }; if ($?) { git push }",
         "problemMatcher": []
       },
+      {
+        "label": "Server: Start",
+        "type": "shell",
+        "command": "npm run dev",
+        "isBackground": true,
+        "problemMatcher": [],
+        "presentation": {
+          "reveal": "always",
+          "panel": "dedicated"
+        }
+      },
+      {
+        "label": "Server: Stop",
+        "type": "shell",
+        "command": "Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }",
+        "problemMatcher": [],
+        "presentation": {
+          "reveal": "always",
+          "panel": "dedicated"
+        }
+      },
+      {
+        "label": "Server: Restart",
+        "dependsOrder": "sequence",
+        "dependsOn": [
+          "Server: Stop",
+          "Server: Start"
+        ],
+        "problemMatcher": []
+      },
     ]
   }
 }

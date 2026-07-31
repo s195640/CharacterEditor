@@ -29,8 +29,8 @@ below for how we keep that open without building for a guess.
    creep, not reuse-readiness.
 4. **New runtime dependencies require explicit approval** — name it, say why, wait
    for a yes. Dev-only tooling (linters, formatters) can be added freely.
-5. **Stack decisions are not yet locked** (see Stack below). Confirm before assuming
-   a rendering engine or architectural pattern.
+5. **Stack decisions lock in as they're made** (see Stack below). Confirm with the
+   user before assuming any not-yet-decided piece of the stack or architecture.
 
 ---
 
@@ -56,8 +56,9 @@ make either path harder later.
 - Character rigging & animation source: Mixamo (humanoid only; quadrupeds out of
   scope for now).
 - Asset interchange format: glTF/GLB.
-- Rendering engine: **not yet decided** — confirm before building anything that
-  assumes one.
+- Rendering engine: **Babylon.js** (`@babylonjs/core` + `@babylonjs/loaders`),
+  decided in Milestone 1. Uses `SceneLoader.ImportMeshAsync` for glTF/GLB and
+  `AnimationGroup` for playback.
 - Equipment approach (agreed, not yet built): skinned mesh layers sharing the
   character's skeleton for anything that deforms with the body (clothing, armor);
   rigid props parented to a single bone for anything that doesn't (weapons, shields).
@@ -105,12 +106,27 @@ backfilled into history.
 
 ## Repo layout
 
-Mostly not yet established. The first real task should propose a structure
-reflecting the Core/Shell split as part of its plan; once approved, update this
-section to match — don't invent a second, competing structure in a later task.
+Established in Milestone 1 — single package, no workspaces/monorepo split (no
+second consumer exists yet to justify one):
 
+- `core/` — Core logic. `characterLoader.ts` (loads a character via Babylon's
+  `SceneLoader`), `animationController.ts` (wraps `AnimationGroup` play/stop),
+  `types.ts`. Operates on Babylon `Scene`/`AnimationGroup` objects (the rendering
+  engine is a locked architectural decision, not "app UI") but has no DOM/UI-panel
+  code and no assumptions about how it's hosted.
+- `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
+  Babylon `Engine`/camera/light, and render loop, and call into `core/`.
+  `shell/public/characters/*.glb` — converted character assets, served as static
+  files by Vite.
+- `assets/source/` — raw Mixamo FBX exports, kept for reproducibility of the
+  conversion step.
+- `tools/convert_fbx_to_glb.py` — headless Blender script (`bpy`) that imports an
+  FBX and exports GLB with animations; run via
+  `blender --background --python tools/convert_fbx_to_glb.py -- <in.fbx> <out.glb>`.
 - `docs/milestones/` — established (see Versioning & Milestone Summaries above).
-- Everything else: TBD.
+- Root: `package.json`, `tsconfig.json`, `vite.config.ts` (`root: 'shell'`).
+
+Don't invent a second, competing structure in a later task — extend this one.
 
 ---
 
