@@ -4,6 +4,7 @@ import {
   SceneLoaderAnimationGroupLoadingMode,
   type Scene,
   type Skeleton,
+  Vector3,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import type { CharacterHandle } from "./types";
@@ -58,4 +59,46 @@ export async function loadEquipment(
     skeleton.dispose();
   }
   return result.meshes;
+}
+
+// Loads a rigid (unskinned) prop mesh and parents it directly to the
+// TransformNode Babylon's glTF loader links to the given bone -- the
+// "weapons, shields" case from CLAUDE.md's Equipment approach, distinct from
+// loadEquipment's shared-skeleton skinned layers. Deliberately not using
+// attachToBone: it tracks the bone correctly at render time, but the glTF
+// exporter's scene-graph walk doesn't see it at all, so an attached prop
+// silently vanishes from any export. Plain reparenting to the bone's own
+// linked node is a normal parent/child relationship, so it exports like any
+// other node.
+export async function loadProp(
+  scene: Scene,
+  rootUrl: string,
+  fileName: string,
+  skeleton: Skeleton,
+  boneName: string,
+  rotationOffset: Vector3 = Vector3.Zero(),
+): Promise<AbstractMesh> {
+  const result = await SceneLoader.ImportMeshAsync("", rootUrl, fileName, scene);
+  const mesh = result.meshes.find((m) => m.getTotalVertices() > 0);
+  if (!mesh) {
+    throw new Error(`No mesh geometry found in ${fileName}`);
+  }
+  const bone = skeleton.bones.find((b) => b.name === boneName);
+  if (!bone) {
+    throw new Error(`Bone "${boneName}" not found on skeleton`);
+  }
+  const boneNode = bone.getTransformNode();
+  if (!boneNode) {
+    throw new Error(`Bone "${boneName}" has no linked transform node`);
+  }
+  // The bone's node carries the character's baked-in import scale (e.g.
+  // 0.01), so compensate by its inverse to keep the prop's authored size.
+  boneNode.computeWorldMatrix(true);
+  const parentScaling = boneNode.absoluteScaling;
+  mesh.position.set(0, 0, 0);
+  mesh.rotationQuaternion = null;
+  mesh.rotation.copyFrom(rotationOffset);
+  mesh.scaling.set(1 / parentScaling.x, 1 / parentScaling.y, 1 / parentScaling.z);
+  mesh.parent = boneNode;
+  return mesh;
 }
