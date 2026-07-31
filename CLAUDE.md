@@ -88,8 +88,9 @@ milestone.
 1. One rigged, animated character rendering in-browser
 2. Animation switching on that character
 3. One swappable equipment layer working
-4. Export to glTF + manifest
-5. Generalize: more slots, more bodies, sizing
+4. GUI controls for animation and equipment
+5. Export to glTF + manifest
+6. Generalize: more slots, more bodies, sizing
 
 **`docs/milestones/MILESTONE_<N>_<slug>.md`** — one file per major planned item,
 written once, at the point that milestone is actually complete. This is a release
