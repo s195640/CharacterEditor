@@ -184,17 +184,20 @@ second consumer exists yet to justify one):
   `scene.onBeforeRenderObservable`, not just once on slider input: the
   retargeted animations' baked glTF data includes a constant scale=1 track on
   every bone, which silently overwrites any one-time manual scaling within a
-  frame or two. Legs specifically also need a **height compensation**,
-  applied in `main.ts`: lengthening a leg pushes the foot further from the
-  hip — i.e. down, through the ground — since legs hang downward, not the
-  character growing taller with feet planted. A first attempt derived the
-  expected compensation from rest-pose bone offsets times the hips'
-  `absoluteScaling`; that value turned out unreliable for a bone-linked node
-  (read back as a bare `1` at rest, didn't scale proportionally once actually
-  stretched) — confirmed by comparing predicted vs. actual foot-drop across
-  several slider values, which diverged non-linearly. The robust fix
-  measures the foot's actual world position each frame and cancels out
-  whatever the leg stretch just did to it, rather than trusting a formula),
+  frame or two. Any bone between the hips and the toe (Upper Leg, Lower Leg,
+  Feet) also needs a **ground-height compensation**, applied in `main.ts`:
+  lengthening one pushes the foot further from the hip — i.e. down, through
+  the ground — since legs hang downward, not the character growing taller
+  with feet planted. A first attempt derived the expected compensation from
+  rest-pose bone offsets times the hips' `absoluteScaling`; that value turned
+  out unreliable for a bone-linked node (read back as a bare `1` at rest,
+  didn't scale proportionally once actually stretched) — confirmed by
+  comparing predicted vs. actual foot-drop across several slider values,
+  which diverged non-linearly. The robust fix measures the foot's actual
+  world position every frame and cancels out whatever moved it, regardless
+  of which bone caused it — this is also why splitting Legs into Upper/Lower
+  and adding a separate Feet control needed no changes to the compensation
+  logic at all, only to the bone-name list),
   `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
@@ -217,13 +220,14 @@ second consumer exists yet to justify one):
   once at load as the "1.0" baseline, then sets `rootNode.scaling =
   baseline.scale(sliderValue)` on input — equipment scales proportionally for
   free (see `loadEquipment`/`loadProp` above). Body Shape: a "Body Shape"
-  section with a Length + Width slider each for Arms, Legs, Head, and Belly
-  (bone-name groups defined in `main.ts` as `BODY_PART_BONES` — Shell's
-  concern, not Core's, same as equipment bone names like
-  `"mixamorig:RightHand"`), calling `scaleBodyPart` every frame via
-  `scene.onBeforeRenderObservable` (see `bodyShape.ts` above for why "every
-  frame" instead of once). `main.ts` also triggers the actual downloads after
-  calling `exportCharacter` (`gltfData.downloadFiles()`
+  section with a Length + Width slider each for Upper Arm, Lower Arm, Upper
+  Leg, Lower Leg, Neck, Feet, Head, and Belly (bone-name groups defined in
+  `main.ts` as `BODY_PART_BONES` — Shell's concern, not Core's, same as
+  equipment bone names like `"mixamorig:RightHand"`), calling `scaleBodyPart`
+  every frame via `scene.onBeforeRenderObservable` (see `bodyShape.ts` above
+  for why "every frame" instead of once, and for the ground-height
+  compensation this list's leg/foot entries need). `main.ts` also triggers
+  the actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
   for the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
   `shell/public/characters/*.glb` — converted character/animation/equipment
   assets, served as static files by Vite.
