@@ -1,14 +1,18 @@
+export interface EquipmentItemOptions {
+  label: string;
+  onToggle: () => void;
+}
+
 export interface ControlPanelOptions {
   animationNames: string[];
   onSelectAnimation: (name: string) => void;
-  equipmentLabel: string;
-  onToggleEquipment: () => void;
+  equipmentItems: EquipmentItemOptions[];
   onExport: () => void;
   onToggleSun: () => void;
 }
 
 export interface ControlPanel {
-  setEquipmentState(equipped: boolean): void;
+  setEquipmentState(label: string, equipped: boolean): void;
   setSunState(enabled: boolean): void;
 }
 
@@ -31,9 +35,13 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   equipmentHeading.textContent = "Equipment";
   panel.appendChild(equipmentHeading);
 
-  const equipButton = document.createElement("button");
-  equipButton.addEventListener("click", () => options.onToggleEquipment());
-  panel.appendChild(equipButton);
+  const equipButtons = new Map<string, HTMLButtonElement>();
+  for (const item of options.equipmentItems) {
+    const button = document.createElement("button");
+    button.addEventListener("click", () => item.onToggle());
+    panel.appendChild(button);
+    equipButtons.set(item.label, button);
+  }
 
   const lightingHeading = document.createElement("h2");
   lightingHeading.textContent = "Lighting";
@@ -54,12 +62,16 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
 
   document.body.appendChild(panel);
 
-  const setEquipmentState = (equipped: boolean): void => {
-    equipButton.textContent = equipped
-      ? `Remove ${options.equipmentLabel}`
-      : `Equip ${options.equipmentLabel}`;
+  const setEquipmentState = (label: string, equipped: boolean): void => {
+    const button = equipButtons.get(label);
+    if (!button) {
+      throw new Error(`No equipment button for "${label}"`);
+    }
+    button.textContent = equipped ? `Remove ${label}` : `Equip ${label}`;
   };
-  setEquipmentState(false);
+  for (const item of options.equipmentItems) {
+    setEquipmentState(item.label, false);
+  }
 
   const setSunState = (enabled: boolean): void => {
     sunButton.textContent = enabled ? "Turn Sun Off" : "Turn Sun On";
