@@ -1,10 +1,12 @@
 import {
   ArcRotateCamera,
   Color3,
+  DirectionalLight,
   Engine,
   HemisphericLight,
   MeshBuilder,
   Scene,
+  ShadowGenerator,
   StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
@@ -43,16 +45,26 @@ const camera = new ArcRotateCamera(
 );
 camera.attachControl(canvas, true);
 
-new HemisphericLight("light", new Vector3(0, 1, 0), scene);
+const ambientLight = new HemisphericLight("ambientLight", new Vector3(0, 1, 0), scene);
+ambientLight.intensity = 0.6;
+
+const sunLight = new DirectionalLight("sun", new Vector3(-1, -2, -1), scene);
+sunLight.position = new Vector3(5, 10, 5);
+sunLight.intensity = 0.8;
+
+const shadowGenerator = new ShadowGenerator(1024, sunLight);
+shadowGenerator.useBlurExponentialShadowMap = true;
 
 const ground = MeshBuilder.CreateGround("ground", { width: 10, height: 10 }, scene);
 const groundMaterial = new StandardMaterial("groundMaterial", scene);
 groundMaterial.diffuseColor = new Color3(0.5, 0.5, 0.5);
 groundMaterial.specularColor = Color3.Black();
 ground.material = groundMaterial;
+ground.receiveShadows = true;
 
 async function main() {
   const character = await loadCharacter(scene, "/characters/", CHARACTER_FILE);
+  character.meshes.forEach((mesh) => shadowGenerator.addShadowCaster(mesh));
   for (const file of ADDITIONAL_ANIMATION_FILES) {
     await loadAnimationClip(scene, "/characters/", file);
   }
@@ -66,11 +78,19 @@ async function main() {
     EQUIPMENT_FILE,
     character.skeletons[0],
   );
+  equipmentMeshes.forEach((mesh) => shadowGenerator.addShadowCaster(mesh));
   let equipped = false;
   const setEquipped = (value: boolean) => {
     equipped = value;
     equipmentMeshes.forEach((mesh) => mesh.setEnabled(equipped));
     panel.setEquipmentState(equipped);
+  };
+
+  let sunEnabled = true;
+  const setSunEnabled = (value: boolean) => {
+    sunEnabled = value;
+    sunLight.setEnabled(sunEnabled);
+    panel.setSunState(sunEnabled);
   };
 
   const handleExport = async () => {
@@ -91,6 +111,7 @@ async function main() {
     onExport: () => {
       void handleExport();
     },
+    onToggleSun: () => setSunEnabled(!sunEnabled),
   });
   setEquipped(false);
 
