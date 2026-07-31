@@ -60,10 +60,12 @@ make either path harder later.
   `@babylonjs/serializers`), decided in Milestone 1, export support added in
   Milestone 5. Uses `SceneLoader.ImportMeshAsync` for glTF/GLB,
   `AnimationGroup` for playback, `GLTF2Export.GLBAsync` for export.
-- Equipment approach (built in Milestone 3): skinned mesh layers sharing the
-  character's skeleton for anything that deforms with the body (clothing, armor);
-  rigid props parented to a single bone for anything that doesn't (weapons, shields)
-  — the rigid-prop case is still unbuilt, only the skinned-layer case has been proven.
+- Equipment approach: skinned mesh layers sharing the character's skeleton for
+  anything that deforms with the body (clothing, armor — built in Milestone 3);
+  rigid props parented to a bone's linked `TransformNode` (`bone.getTransformNode()`,
+  plain `mesh.parent =`, not `attachToBone` — that mechanism tracks the bone fine
+  live but is invisible to the glTF exporter) for anything that doesn't (weapons,
+  shields — added post-Milestone-5, patch `0.5.3`).
 - No backend, no auth, no persistence, no multiplayer — none of this exists yet and
   none of it should be introduced without a separate conversation first.
 
@@ -154,7 +156,11 @@ second consumer exists yet to justify one):
   rebinds it onto an already-loaded skeleton, discarding the duplicate
   skeleton the glTF brings with it — only correct if the equipment was
   authored against the same bone hierarchy/order, see
-  `tools/make_equipment_placeholder.py`), `animationController.ts` (wraps
+  `tools/make_equipment_placeholder.py`; `loadProp` loads a rigid unskinned
+  prop and parents it to `bone.getTransformNode()` — plain reparenting, not
+  `attachToBone`, because the exporter's scene-graph walk doesn't see
+  attachToBone'd nodes at all — compensating scale by the bone node's inverse
+  `absoluteScaling` the same way), `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
   clips, `stop()`, `list()`), `exporter.ts` (`exportCharacter` calls
   `GLTF2Export.GLBAsync`, excluding nodes via a caller-supplied
@@ -167,16 +173,17 @@ second consumer exists yet to justify one):
   assumptions about how it's hosted.
 - `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
-  animations) and `E` (toggle equipment) listeners, and call into `core/`.
+  animations) and `E` (toggle helmet) listeners, and call into `core/`.
   `ui.ts` + `ui.css` — the right-side control panel (`createControlPanel`):
-  plain DOM, no framework, one button per loaded animation, an equip/remove
-  toggle, and an Export button; `main.ts` keeps a single `setEquipped`
-  function that both the `E` key and the panel button call, so the button
-  label stays correct regardless of which one triggered it. `main.ts` also
-  triggers the actual downloads after calling `exportCharacter`
-  (`gltfData.downloadFiles()` for the `.glb`, a small Blob-anchor helper for
-  `character.manifest.json`). `shell/public/characters/*.glb` — converted
-  character/animation/equipment assets, served as static files by Vite.
+  plain DOM, no framework, one button per loaded animation, one toggle button
+  per item in a caller-supplied `equipmentItems` list, and an Export button;
+  `main.ts` keeps an `equippables` list (currently Helmet, Right Sword, Left
+  Sword) and a single `setEquippableState` function so every toggle path (GUI
+  button or the `E` key) stays in sync. `main.ts` also triggers the actual
+  downloads after calling `exportCharacter` (`gltfData.downloadFiles()` for
+  the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
+  `shell/public/characters/*.glb` — converted character/animation/equipment
+  assets, served as static files by Vite.
 - `assets/source/` — raw Mixamo FBX exports, kept for reproducibility of the
   conversion step.
 - `tools/convert_fbx_to_glb.py` — headless Blender script (`bpy`) that imports an
@@ -191,6 +198,11 @@ second consumer exists yet to justify one):
   sphere at a given bone's rest position, skins it 100% to that bone, and
   exports mesh + full armature as GLB; run via
   `blender --background --python tools/make_equipment_placeholder.py -- <ref.fbx> <out.glb> <bone_name>`.
+- `tools/make_prop_placeholder.py` — headless Blender script for rigid
+  (unskinned) props: builds a simple mesh with no armature, grip end at local
+  origin (0, 0, 0), since `loadProp` treats the mesh's own transform as an
+  offset from whatever bone it's parented to at runtime; run via
+  `blender --background --python tools/make_prop_placeholder.py -- <out.glb> <length>`.
 - `docs/milestones/` — established (see Versioning & Milestone Summaries above).
 - Root: `package.json`, `tsconfig.json`, `vite.config.ts` (`root: 'shell'`).
 
