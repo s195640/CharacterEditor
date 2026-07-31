@@ -10,7 +10,8 @@ import {
   StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
-import { loadAnimationClip, loadCharacter, loadEquipment } from "../core/characterLoader";
+import type { AbstractMesh } from "@babylonjs/core";
+import { loadAnimationClip, loadCharacter, loadEquipment, loadProp } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
 import { exportCharacter } from "../core/exporter";
 import { createControlPanel } from "./ui";
@@ -30,6 +31,13 @@ function downloadJson(filename: string, data: unknown): void {
 const CHARACTER_FILE = "Walking.glb";
 const ADDITIONAL_ANIMATION_FILES = ["Idle.glb", "Running.glb"];
 const EQUIPMENT_FILE = "Helmet.glb";
+const SWORD_FILE = "Sword.glb";
+
+interface EquippableItem {
+  label: string;
+  meshes: AbstractMesh[];
+  equipped: boolean;
+}
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const engine = new Engine(canvas, true);
@@ -78,12 +86,34 @@ async function main() {
     EQUIPMENT_FILE,
     character.skeletons[0],
   );
-  equipmentMeshes.forEach((mesh) => shadowGenerator.addShadowCaster(mesh));
-  let equipped = false;
-  const setEquipped = (value: boolean) => {
-    equipped = value;
-    equipmentMeshes.forEach((mesh) => mesh.setEnabled(equipped));
-    panel.setEquipmentState(equipped);
+  const rightSwordMesh = await loadProp(
+    scene,
+    "/characters/",
+    SWORD_FILE,
+    character.skeletons[0],
+    "mixamorig:RightHand",
+    new Vector3(Math.PI, 0, 0),
+  );
+  const leftSwordMesh = await loadProp(
+    scene,
+    "/characters/",
+    SWORD_FILE,
+    character.skeletons[0],
+    "mixamorig:LeftHand",
+    new Vector3(Math.PI, 0, 0),
+  );
+
+  const equippables: EquippableItem[] = [
+    { label: "Helmet", meshes: equipmentMeshes, equipped: false },
+    { label: "Right Sword", meshes: [rightSwordMesh], equipped: false },
+    { label: "Left Sword", meshes: [leftSwordMesh], equipped: false },
+  ];
+  equippables.forEach((item) => item.meshes.forEach((mesh) => shadowGenerator.addShadowCaster(mesh)));
+
+  const setEquippableState = (item: EquippableItem, value: boolean) => {
+    item.equipped = value;
+    item.meshes.forEach((mesh) => mesh.setEnabled(value));
+    panel.setEquipmentState(item.label, value);
   };
 
   let sunEnabled = true;
@@ -96,8 +126,9 @@ async function main() {
   const handleExport = async () => {
     const result = await exportCharacter(scene, {
       sourceCharacter: CHARACTER_FILE,
-      equippedItems: equipped ? ["Helmet"] : [],
-      shouldExportNode: (node) => equipped || !equipmentMeshes.some((mesh) => mesh === node),
+      equippedItems: equippables.filter((item) => item.equipped).map((item) => item.label),
+      shouldExportNode: (node) =>
+        !equippables.some((item) => !item.equipped && item.meshes.some((mesh) => mesh === node)),
     });
     result.gltfData.downloadFiles();
     downloadJson("character.manifest.json", result.manifest);
@@ -106,20 +137,23 @@ async function main() {
   const panel = createControlPanel({
     animationNames: animationController.list(),
     onSelectAnimation: (name) => animationController.play(name),
-    equipmentLabel: "Helmet",
-    onToggleEquipment: () => setEquipped(!equipped),
+    equipmentItems: equippables.map((item) => ({
+      label: item.label,
+      onToggle: () => setEquippableState(item, !item.equipped),
+    })),
     onExport: () => {
       void handleExport();
     },
     onToggleSun: () => setSunEnabled(!sunEnabled),
   });
-  setEquipped(false);
+  equippables.forEach((item) => setEquippableState(item, false));
 
+  const helmet = equippables[0];
   window.addEventListener("keydown", (event) => {
     if (event.code === "Space") {
       animationController.next();
     } else if (event.code === "KeyE") {
-      setEquipped(!equipped);
+      setEquippableState(helmet, !helmet.equipped);
     }
   });
 }
