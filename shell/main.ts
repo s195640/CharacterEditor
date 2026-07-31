@@ -86,12 +86,17 @@ async function main() {
   const animationController = new AnimationController(scene.animationGroups);
   animationController.play();
 
+  const characterMesh = character.meshes.find((mesh) => mesh.skeleton === character.skeletons[0]);
+  if (!characterMesh) {
+    throw new Error("Character mesh with a skeleton not found");
+  }
+
   const equipmentMeshes = await loadEquipment(
     scene,
     "/characters/",
     EQUIPMENT_FILE,
     character.skeletons[0],
-    character.rootNode,
+    characterMesh,
   );
   const rightSwordMesh = await loadProp(
     scene,

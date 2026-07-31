@@ -51,29 +51,29 @@ export async function loadAnimationClip(
 // skeleton, discarding the duplicate skeleton the glTF brings with it. Only
 // correct if the equipment was authored against the same bone hierarchy/order
 // as targetSkeleton (see tools/make_equipment_placeholder.py). Reparents the
-// mesh onto the character's own root: the equipment glTF brings its own
-// unrelated root/armature hierarchy, so without this the mesh's base
-// transform never follows the character's root if it's later rescaled --
-// its skin deformation would still reference the right bones, but the mesh's
-// own world matrix would stay stuck at whatever scale it was originally
-// imported at.
+// mesh onto the SAME parent the character's own skinned mesh uses (not the
+// overall scene root): the character's mesh sits one level below the true
+// root (root -> "Armature" -> mesh), and the skeleton's bones live in
+// Armature's space too. Reparenting equipment straight onto the true root
+// instead puts its mesh transform in a different reference frame than the
+// skin matrices operate in, which corrupts the skinned result -- the mesh
+// still tracks bone rotation, but position/scale render wildly wrong.
 export async function loadEquipment(
   scene: Scene,
   rootUrl: string,
   fileName: string,
   targetSkeleton: Skeleton,
-  characterRootNode: TransformNode,
+  targetMesh: AbstractMesh,
 ): Promise<AbstractMesh[]> {
+  const parentNode = targetMesh.parent;
+  if (!parentNode) {
+    throw new Error("targetMesh has no parent to reparent equipment onto");
+  }
   const result = await SceneLoader.ImportMeshAsync("", rootUrl, fileName, scene);
   const meshesWithGeometry = result.meshes.filter((m) => m.getTotalVertices() > 0);
   for (const mesh of meshesWithGeometry) {
     mesh.skeleton = targetSkeleton;
-    mesh.parent = characterRootNode;
-    // The mesh's cached bounding info still reflects the disposed duplicate
-    // skeleton it was imported with. Left stale, it silently inflates
-    // anything that reads bounds (e.g. a shadow generator's frustum
-    // auto-sizing), even while the mesh renders correctly.
-    mesh.refreshBoundingInfo(true, false);
+    mesh.parent = parentNode;
   }
   for (const skeleton of result.skeletons) {
     skeleton.dispose();
