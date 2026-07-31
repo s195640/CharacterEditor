@@ -1,6 +1,7 @@
 import { ArcRotateCamera, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
 import { loadAnimationClip, loadCharacter, loadEquipment } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
+import { createControlPanel } from "./ui";
 
 const CHARACTER_FILE = "Walking.glb";
 const ADDITIONAL_ANIMATION_FILES = ["Idle.glb", "Running.glb"];
@@ -41,7 +42,15 @@ async function main() {
   const setEquipped = (value: boolean) => {
     equipped = value;
     equipmentMeshes.forEach((mesh) => mesh.setEnabled(equipped));
+    panel.setEquipmentState(equipped);
   };
+
+  const panel = createControlPanel({
+    animationNames: animationController.list(),
+    onSelectAnimation: (name) => animationController.play(name),
+    equipmentLabel: "Helmet",
+    onToggleEquipment: () => setEquipped(!equipped),
+  });
   setEquipped(false);
 
   window.addEventListener("keydown", (event) => {
