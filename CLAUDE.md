@@ -150,17 +150,27 @@ Established in Milestone 1 — single package, no workspaces/monorepo split (no
 second consumer exists yet to justify one):
 
 - `core/` — Core logic. `characterLoader.ts` (`loadCharacter` loads a character
-  via Babylon's `SceneLoader`; `loadAnimationClip` retargets an animation-only
-  glTF onto an already-loaded skeleton via `ImportAnimationsAsync`, matching
-  targets by node name; `loadEquipment` loads a skinned equipment mesh and
-  rebinds it onto an already-loaded skeleton, discarding the duplicate
-  skeleton the glTF brings with it — only correct if the equipment was
-  authored against the same bone hierarchy/order, see
-  `tools/make_equipment_placeholder.py`; `loadProp` loads a rigid unskinned
-  prop and parents it to `bone.getTransformNode()` — plain reparenting, not
-  `attachToBone`, because the exporter's scene-graph walk doesn't see
-  attachToBone'd nodes at all — compensating scale by the bone node's inverse
-  `absoluteScaling` the same way), `animationController.ts` (wraps
+  via Babylon's `SceneLoader` and returns a `rootNode` — the parentless node
+  at the top of the whole hierarchy (usually the loader's synthetic
+  `__root__`, found by checking both `result.meshes` and
+  `result.transformNodes` since it isn't always a `TransformNode`); scaling
+  `rootNode` resizes the entire character (see Sizing below);
+  `loadAnimationClip` retargets an animation-only glTF onto an already-loaded
+  skeleton via `ImportAnimationsAsync`, matching targets by node name;
+  `loadEquipment` loads a skinned equipment mesh, rebinds it onto an
+  already-loaded skeleton (discarding the duplicate skeleton the glTF brings
+  with it — only correct if authored against the same bone hierarchy/order,
+  see `tools/make_equipment_placeholder.py`), **and reparents the mesh onto
+  the character's own `rootNode`** — the equipment glTF brings its own
+  unrelated root/armature hierarchy, so without reparenting, the mesh's own
+  world matrix never follows the character if it's later rescaled, even
+  though its skin deformation still references the right bones; `loadProp`
+  loads a rigid unskinned prop and parents it to `bone.getTransformNode()` —
+  plain reparenting, not `attachToBone`, because the exporter's scene-graph
+  walk doesn't see attachToBone'd nodes at all — compensating scale by the
+  bone node's inverse `absoluteScaling`, computed once at load time so it
+  keeps tracking proportionally if the character is rescaled afterward),
+  `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
   clips, `stop()`, `list()`), `exporter.ts` (`exportCharacter` calls
   `GLTF2Export.GLBAsync`, excluding nodes via a caller-supplied
@@ -176,12 +186,16 @@ second consumer exists yet to justify one):
   animations) and `E` (toggle helmet) listeners, and call into `core/`.
   `ui.ts` + `ui.css` — the right-side control panel (`createControlPanel`):
   plain DOM, no framework, one button per loaded animation, one toggle button
-  per item in a caller-supplied `equipmentItems` list, and an Export button;
-  `main.ts` keeps an `equippables` list (currently Helmet, Right Sword, Left
-  Sword) and a single `setEquippableState` function so every toggle path (GUI
-  button or the `E` key) stays in sync. `main.ts` also triggers the actual
-  downloads after calling `exportCharacter` (`gltfData.downloadFiles()` for
-  the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
+  per item in a caller-supplied `equipmentItems` list, a Size slider
+  (0.5–2.0), and an Export button; `main.ts` keeps an `equippables` list
+  (currently Helmet, Right Sword, Left Sword) and a single
+  `setEquippableState` function so every toggle path (GUI button or the `E`
+  key) stays in sync. Sizing: `main.ts` captures `character.rootNode.scaling`
+  once at load as the "1.0" baseline, then sets `rootNode.scaling =
+  baseline.scale(sliderValue)` on input — equipment scales proportionally for
+  free (see `loadEquipment`/`loadProp` above). `main.ts` also triggers the
+  actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
+  for the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
   `shell/public/characters/*.glb` — converted character/animation/equipment
   assets, served as static files by Vite.
 - `assets/source/` — raw Mixamo FBX exports, kept for reproducibility of the
