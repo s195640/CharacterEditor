@@ -4,10 +4,12 @@ export interface ControlPanelOptions {
   equipmentLabel: string;
   onToggleEquipment: () => void;
   onExport: () => void;
+  onToggleSun: () => void;
 }
 
 export interface ControlPanel {
   setEquipmentState(equipped: boolean): void;
+  setSunState(enabled: boolean): void;
 }
 
 export function createControlPanel(options: ControlPanelOptions): ControlPanel {
@@ -33,6 +35,14 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   equipButton.addEventListener("click", () => options.onToggleEquipment());
   panel.appendChild(equipButton);
 
+  const lightingHeading = document.createElement("h2");
+  lightingHeading.textContent = "Lighting";
+  panel.appendChild(lightingHeading);
+
+  const sunButton = document.createElement("button");
+  sunButton.addEventListener("click", () => options.onToggleSun());
+  panel.appendChild(sunButton);
+
   const exportHeading = document.createElement("h2");
   exportHeading.textContent = "Export";
   panel.appendChild(exportHeading);
@@ -51,5 +61,10 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   };
   setEquipmentState(false);
 
-  return { setEquipmentState };
+  const setSunState = (enabled: boolean): void => {
+    sunButton.textContent = enabled ? "Turn Sun Off" : "Turn Sun On";
+  };
+  setSunState(true);
+
+  return { setEquipmentState, setSunState };
 }
