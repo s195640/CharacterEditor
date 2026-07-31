@@ -65,3 +65,13 @@
   flex: 1;
   min-width: 0;
 }
+
+#control-panel .frame-step-row {
+  display: flex;
+  gap: 6px;
+}
+
+#control-panel .frame-step-row button {
+  width: auto;
+  flex: 1;
+}

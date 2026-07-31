@@ -179,7 +179,20 @@ second consumer exists yet to justify one):
   group, not just the currently playing one — `AnimationGroup.play()` reads
   its own stored `speedRatio` when (re)starting, so setting it on all groups
   up front means switching animations afterward (GUI button, spacebar)
-  keeps the chosen speed without reapplying it per switch), `bodyShape.ts`
+  keeps the chosen speed without reapplying it per switch. `pause()`/
+  `resume()`/`togglePause()`/`isPaused()` control the currently-selected
+  group only; `isPaused()` derives from Babylon's own state
+  (`isStarted && !isPlaying`, since `isPlaying` is itself defined as
+  `isStarted && !isPaused` — no public `isPaused` getter exists) rather than
+  tracking a separate flag that could drift out of sync.
+  `stepFrame(delta)` steps to the previous/next *actual authored keyframe*,
+  not a fixed frame offset: inspecting `getKeys()` on the source clips found
+  keys baked roughly 2 frame-units apart, not 1, so a fixed delta of 1 would
+  land between two keyframes instead of on one — it finds the keyframe
+  nearest the current position (in case playback was paused
+  mid-interpolation) and moves exactly one keyframe index from there,
+  clamped to the clip's ends; pauses first if not already paused, since
+  stepping while playing doesn't make sense), `bodyShape.ts`
   (`getBoneNode(skeleton, name)` —
   shared lookup, throws if the bone or its linked `TransformNode` is missing;
   `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
@@ -244,8 +257,16 @@ second consumer exists yet to justify one):
   `ui.ts` + `ui.css` — the right-side control panel (`createControlPanel`):
   plain DOM, no framework, one button per loaded animation, a Speed slider
   (0.5–2.0, same range/style as Size and Body Shape) right below the
-  animation buttons calling `animationController.setSpeed` on input, one
-  toggle button per item in a caller-supplied `equipmentItems` list, a Size
+  animation buttons calling `animationController.setSpeed` on input, a
+  Pause/Play toggle button below that (label reflects the action, like the
+  sun toggle — "Pause" while playing, "Play" while paused) calling
+  `animationController.togglePause`, and a `◀ Frame` / `Frame ▶` button pair
+  calling `animationController.stepFrame(-1)`/`stepFrame(1)`; `main.ts`'s
+  `syncPauseUI` re-reads `animationController.isPaused()` into the button
+  label after anything that can change play state — selecting an animation,
+  the spacebar shortcut, stepping a frame, and Reset — since those don't
+  go through `togglePause` themselves. One toggle button per item in a
+  caller-supplied `equipmentItems` list, a Size
   slider (0.5–2.0), and an Export button; `main.ts` keeps an `equippables` list
   (currently Helmet, Right Sword, Left Sword) and a single
   `setEquippableState` function so every toggle path (GUI button or the `E`

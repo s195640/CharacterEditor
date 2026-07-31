@@ -264,6 +264,8 @@ async function main() {
   // vertical amount if unscaled while swung out mid-stride in Running).
   // Reset already knows the true defaults outright, so it sets them directly
   // instead of re-deriving them through measurement.
+  const syncPauseUI = () => panel.setPauseState(animationController.isPaused());
+
   const resetAll = () => {
     for (const label of Object.keys(BODY_PART_BONES)) {
       bodyPartState[label] = { length: 1, width: 1 };
@@ -275,6 +277,7 @@ async function main() {
     setSunEnabled(true);
     animationController.play();
     animationController.setSpeed(1);
+    syncPauseUI();
     panel.resetControls();
   };
 
@@ -291,7 +294,10 @@ async function main() {
 
   const panel = createControlPanel({
     animationNames: animationController.list(),
-    onSelectAnimation: (name) => animationController.play(name),
+    onSelectAnimation: (name) => {
+      animationController.play(name);
+      syncPauseUI();
+    },
     equipmentItems: equippables.map((item) => ({
       label: item.label,
       onToggle: () => setEquippableState(item, !item.equipped),
@@ -303,6 +309,14 @@ async function main() {
     onSizeChange: (value) => setSize(value),
     onSpeedChange: (value) => animationController.setSpeed(value),
     onReset: () => resetAll(),
+    onTogglePause: () => {
+      animationController.togglePause();
+      syncPauseUI();
+    },
+    onStepFrame: (delta) => {
+      animationController.stepFrame(delta);
+      syncPauseUI();
+    },
     bodyParts: Object.keys(BODY_PART_BONES).map((label) => ({
       label,
       onLengthChange: (value: number) => setBodyPart(label, value, bodyPartState[label].width),
@@ -315,6 +329,7 @@ async function main() {
   window.addEventListener("keydown", (event) => {
     if (event.code === "Space") {
       animationController.next();
+      syncPauseUI();
     } else if (event.code === "KeyE") {
       setEquippableState(helmet, !helmet.equipped);
     }

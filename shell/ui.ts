@@ -19,11 +19,14 @@ export interface ControlPanelOptions {
   bodyParts: BodyPartOptions[];
   onReset: () => void;
   onSpeedChange: (value: number) => void;
+  onTogglePause: () => void;
+  onStepFrame: (delta: number) => void;
 }
 
 export interface ControlPanel {
   setEquipmentState(label: string, equipped: boolean): void;
   setSunState(enabled: boolean): void;
+  setPauseState(paused: boolean): void;
   resetControls(): void;
 }
 
@@ -72,6 +75,22 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
 
   const speedSlider = createLabeledSlider("Speed", options.onSpeedChange);
   panel.appendChild(speedSlider.row);
+
+  const pauseButton = document.createElement("button");
+  pauseButton.addEventListener("click", () => options.onTogglePause());
+  panel.appendChild(pauseButton);
+
+  const frameStepRow = document.createElement("div");
+  frameStepRow.className = "frame-step-row";
+  const prevFrameButton = document.createElement("button");
+  prevFrameButton.textContent = "◀ Frame";
+  prevFrameButton.addEventListener("click", () => options.onStepFrame(-1));
+  frameStepRow.appendChild(prevFrameButton);
+  const nextFrameButton = document.createElement("button");
+  nextFrameButton.textContent = "Frame ▶";
+  nextFrameButton.addEventListener("click", () => options.onStepFrame(1));
+  frameStepRow.appendChild(nextFrameButton);
+  panel.appendChild(frameStepRow);
 
   const equipmentHeading = document.createElement("h2");
   equipmentHeading.textContent = "Equipment";
@@ -150,6 +169,11 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   };
   setSunState(true);
 
+  const setPauseState = (paused: boolean): void => {
+    pauseButton.textContent = paused ? "Play" : "Pause";
+  };
+  setPauseState(false);
+
   const resetControls = (): void => {
     sizeSlider.value = "1";
     speedSlider.slider.value = "1";
@@ -159,5 +183,5 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
     }
   };
 
-  return { setEquipmentState, setSunState, resetControls };
+  return { setEquipmentState, setSunState, setPauseState, resetControls };
 }
