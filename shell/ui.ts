@@ -3,6 +3,7 @@ export interface ControlPanelOptions {
   onSelectAnimation: (name: string) => void;
   equipmentLabel: string;
   onToggleEquipment: () => void;
+  onExport: () => void;
 }
 
 export interface ControlPanel {
@@ -31,6 +32,15 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   const equipButton = document.createElement("button");
   equipButton.addEventListener("click", () => options.onToggleEquipment());
   panel.appendChild(equipButton);
+
+  const exportHeading = document.createElement("h2");
+  exportHeading.textContent = "Export";
+  panel.appendChild(exportHeading);
+
+  const exportButton = document.createElement("button");
+  exportButton.textContent = "Export";
+  exportButton.addEventListener("click", () => options.onExport());
+  panel.appendChild(exportButton);
 
   document.body.appendChild(panel);
 
