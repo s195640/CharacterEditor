@@ -1,7 +1,20 @@
 import { ArcRotateCamera, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
 import { loadAnimationClip, loadCharacter, loadEquipment } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
+import { exportCharacter } from "../core/exporter";
 import { createControlPanel } from "./ui";
+
+function downloadJson(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 const CHARACTER_FILE = "Walking.glb";
 const ADDITIONAL_ANIMATION_FILES = ["Idle.glb", "Running.glb"];
@@ -45,11 +58,24 @@ async function main() {
     panel.setEquipmentState(equipped);
   };
 
+  const handleExport = async () => {
+    const result = await exportCharacter(scene, {
+      sourceCharacter: CHARACTER_FILE,
+      equippedItems: equipped ? ["Helmet"] : [],
+      shouldExportNode: (node) => equipped || !equipmentMeshes.some((mesh) => mesh === node),
+    });
+    result.gltfData.downloadFiles();
+    downloadJson("character.manifest.json", result.manifest);
+  };
+
   const panel = createControlPanel({
     animationNames: animationController.list(),
     onSelectAnimation: (name) => animationController.play(name),
     equipmentLabel: "Helmet",
     onToggleEquipment: () => setEquipped(!equipped),
+    onExport: () => {
+      void handleExport();
+    },
   });
   setEquipped(false);
 
