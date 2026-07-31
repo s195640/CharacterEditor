@@ -85,6 +85,7 @@ async function main() {
     "/characters/",
     EQUIPMENT_FILE,
     character.skeletons[0],
+    character.rootNode,
   );
   const rightSwordMesh = await loadProp(
     scene,
@@ -123,6 +124,11 @@ async function main() {
     panel.setSunState(sunEnabled);
   };
 
+  const baseScale = character.rootNode.scaling.clone();
+  const setSize = (value: number) => {
+    character.rootNode.scaling = baseScale.scale(value);
+  };
+
   const handleExport = async () => {
     const result = await exportCharacter(scene, {
       sourceCharacter: CHARACTER_FILE,
@@ -145,6 +151,7 @@ async function main() {
       void handleExport();
     },
     onToggleSun: () => setSunEnabled(!sunEnabled),
+    onSizeChange: (value) => setSize(value),
   });
   equippables.forEach((item) => setEquippableState(item, false));
 
