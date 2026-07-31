@@ -41,18 +41,12 @@ interface EquippableItem {
 }
 
 const BODY_PART_BONES: Record<string, string[]> = {
-  Arms: [
-    "mixamorig:LeftArm",
-    "mixamorig:LeftForeArm",
-    "mixamorig:RightArm",
-    "mixamorig:RightForeArm",
-  ],
-  Legs: [
-    "mixamorig:LeftUpLeg",
-    "mixamorig:LeftLeg",
-    "mixamorig:RightUpLeg",
-    "mixamorig:RightLeg",
-  ],
+  "Upper Arm": ["mixamorig:LeftArm", "mixamorig:RightArm"],
+  "Lower Arm": ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"],
+  "Upper Leg": ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg"],
+  "Lower Leg": ["mixamorig:LeftLeg", "mixamorig:RightLeg"],
+  Neck: ["mixamorig:Neck"],
+  Feet: ["mixamorig:LeftFoot", "mixamorig:RightFoot"],
   Head: ["mixamorig:Head"],
   Belly: ["mixamorig:Spine1"],
 };
@@ -179,24 +173,26 @@ async function main() {
     scaleBodyPart(character.skeletons[0], BODY_PART_BONES[label], state.length, state.width);
   };
 
-  // Legs hang downward from the hips, so lengthening them (like any other
-  // body part) pushes the feet further away from the hips -- i.e. further
+  // Any bone between the hips and the toe (Upper Leg, Lower Leg, Feet) hangs
+  // downward, so lengthening it pushes the foot further away -- i.e. further
   // down, through the ground -- instead of making the character taller with
   // feet still planted. Compensate by raising the whole character so the
-  // foot returns to its original ground-contact height.
+  // foot returns to its original ground-contact height, regardless of which
+  // of those bones actually caused the drop.
   //
   // This is measured directly, not derived from a formula: a first attempt
-  // computed the expected added length from rest-pose bone offsets times the
-  // hips' absoluteScaling, which turned out unreliable for a bone-linked
+  // (for Legs alone, before Feet existed as a separate control) computed the
+  // expected added length from rest-pose bone offsets times the hips'
+  // absoluteScaling, which turned out unreliable for a bone-linked
   // TransformNode (it read back a bare 1 instead of the real parent-chain
   // scale at rest, and didn't scale proportionally once actually stretched --
   // confirmed by comparing the predicted vs. actual foot-drop across several
   // slider values, which diverged non-linearly instead of matching). Reading
-  // the foot's actual world position and cancelling out whatever the leg
-  // stretch just did to it sidesteps needing that number to be right at all.
+  // the foot's actual world position and cancelling out whatever just moved
+  // it sidesteps needing any of that to be right at all.
   const leftToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:LeftToeBase");
   const baselineFootY = leftToeBaseNode.getAbsolutePosition().y;
-  const updateLegHeightCompensation = () => {
+  const updateGroundHeightCompensation = () => {
     const uncompensatedFootY = leftToeBaseNode.getAbsolutePosition().y - character.rootNode.position.y;
     character.rootNode.position.y = baselineFootY - uncompensatedFootY;
   };
@@ -211,7 +207,7 @@ async function main() {
     for (const label of Object.keys(BODY_PART_BONES)) {
       applyBodyPart(label);
     }
-    updateLegHeightCompensation();
+    updateGroundHeightCompensation();
   });
 
   const handleExport = async () => {
