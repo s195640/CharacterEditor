@@ -97,6 +97,14 @@ export class AnimationController {
     group.goToFrame(frames[targetIndex]);
   }
 
+  // Rounded: the source clips' authored keyframe times carry floating-point
+  // noise (e.g. 2.0000001, 63.9999980926513672), so a raw readout would show
+  // a confusing near-integer instead of the actual keyframe number.
+  getCurrentFrame(): number {
+    const group = this.groups[this.currentIndex];
+    return group ? Math.round(group.getCurrentFrame()) : 0;
+  }
+
   list(): string[] {
     return this.groups.map((g) => g.name);
   }

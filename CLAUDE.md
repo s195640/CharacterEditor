@@ -156,7 +156,26 @@ second consumer exists yet to justify one):
   `result.transformNodes` since it isn't always a `TransformNode`); scaling
   `rootNode` resizes the entire character (see Sizing below);
   `loadAnimationClip` retargets an animation-only glTF onto an already-loaded
-  skeleton via `ImportAnimationsAsync`, matching targets by node name;
+  skeleton via `ImportAnimationsAsync`, matching targets by node name.
+  `ImportAnimationsAsync` has a side effect worth knowing about: internally
+  it loads the clip into a temporary `AssetContainer` and retargets it via
+  `mergeAnimationsTo`, which starts a raw `Animatable` per animated target
+  via `scene.beginAnimation()` to preview the container's own
+  already-playing state (confirmed by patching `scene.beginAnimation` and
+  capturing a stack trace — every extra call traced back through
+  `mergeAnimationsTo`). These are separate from, and invisible to, the
+  `AnimationGroup` the caller actually controls — pausing/stopping that
+  group does nothing to them, and left alone they run forever, permanently
+  overwriting the skeleton every frame regardless of what's selected
+  (confirmed the hard way: with the intended group paused, bone rotations
+  kept drifting ~17 degrees every 300ms, and two paused screenshots 800ms
+  apart came out pixel-different). `stopOrphanedAnimatables(scene)` stops
+  any `scene.animatables` entry not owned by an `AnimationGroup`; call it
+  every frame (see `main.ts`'s `onBeforeRenderObservable`), not once after
+  loading — a one-shot sweep, even deferred to the next actual render frame,
+  consistently missed roughly a third of them no matter where in the
+  loading sequence it ran, so the invariant is continuously re-enforced
+  instead of relying on a one-shot cleanup catching a moving target.
   `loadEquipment` loads a skinned equipment mesh, rebinds it onto an
   already-loaded skeleton (discarding the duplicate skeleton the glTF brings
   with it — only correct if authored against the same bone hierarchy/order,
@@ -192,7 +211,11 @@ second consumer exists yet to justify one):
   nearest the current position (in case playback was paused
   mid-interpolation) and moves exactly one keyframe index from there,
   clamped to the clip's ends; pauses first if not already paused, since
-  stepping while playing doesn't make sense), `bodyShape.ts`
+  stepping while playing doesn't make sense. `getCurrentFrame()` returns the
+  selected group's frame, rounded — the source clips' authored keyframe
+  times carry floating-point noise (e.g. `63.9999980926513672`), so an
+  unrounded readout would show a confusing near-integer instead of the
+  actual keyframe number), `bodyShape.ts`
   (`getBoneNode(skeleton, name)` —
   shared lookup, throws if the bone or its linked `TransformNode` is missing;
   `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
@@ -261,7 +284,14 @@ second consumer exists yet to justify one):
   Pause/Play toggle button below that (label reflects the action, like the
   sun toggle — "Pause" while playing, "Play" while paused) calling
   `animationController.togglePause`, and a `◀ Frame` / `Frame ▶` button pair
-  calling `animationController.stepFrame(-1)`/`stepFrame(1)`; `main.ts`'s
+  calling `animationController.stepFrame(-1)`/`stepFrame(1)`, and a
+  `Frame: N` readout below that, updated every frame from
+  `animationController.getCurrentFrame()` in the same
+  `onBeforeRenderObservable` callback that reapplies body-shape scaling and
+  sweeps orphaned animatables — so it tracks accurately whether playing,
+  paused, or stepping, without needing its own separate update path; useful
+  for pinning down exactly which frame looks wrong when stepping through
+  manually. `main.ts`'s
   `syncPauseUI` re-reads `animationController.isPaused()` into the button
   label after anything that can change play state — selecting an animation,
   the spacebar shortcut, stepping a frame, and Reset — since those don't

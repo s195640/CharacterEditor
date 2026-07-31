@@ -75,3 +75,10 @@
   width: auto;
   flex: 1;
 }
+
+#control-panel .frame-number-display {
+  font-size: 11px;
+  opacity: 0.7;
+  text-align: center;
+  margin: 4px 0 12px;
+}

@@ -47,6 +47,42 @@ export async function loadAnimationClip(
   );
 }
 
+// ImportAnimationsAsync loads a clip into a temporary AssetContainer and
+// retargets it onto this scene's matching nodes via mergeAnimationsTo --
+// which, as a side effect, starts a raw Animatable per animated target via
+// scene.beginAnimation() to preview the container's own already-playing
+// state (confirmed by patching scene.beginAnimation and capturing a stack
+// trace: every extra call traced back through mergeAnimationsTo to
+// importAnimationsCoreAsync). These are separate from, and invisible to,
+// the AnimationGroup the caller actually controls: they aren't in any
+// group's own `animatables`, so pausing/stopping that group does nothing
+// to them, and left alone they run forever, permanently overwriting the
+// skeleton every frame regardless of what's actually selected (confirmed
+// the hard way: with the intended group paused, scene.animatables still
+// held unpaused entries per bone, and bone rotations kept drifting ~17
+// degrees every 300ms).
+//
+// A one-shot sweep after loading, even deferred to the next actual render
+// frame via onAfterRenderObservable, still consistently missed roughly a
+// third of them no matter where in the loading sequence it ran (confirmed:
+// moving it from right after the animation-clip loop to after
+// equipment/props load made no difference at all -- same exact bones left
+// over both times) -- these clips generate 3 scene.beginAnimation calls per
+// bone (one per animated channel) per loadAnimationClip call, and something
+// about replaying/replacing that many targets isn't done settling by any
+// single point checked so far. Rather than chase the exact internal timing
+// further, call this every frame (see main.ts) so the invariant "no
+// ungrouped Animatable exists" gets continuously re-enforced instead of
+// relying on a one-shot cleanup catching a moving target.
+export function stopOrphanedAnimatables(scene: Scene): void {
+  const groupOwned = new Set(scene.animationGroups.flatMap((g) => g.animatables));
+  for (const animatable of scene.animatables) {
+    if (!groupOwned.has(animatable)) {
+      animatable.stop();
+    }
+  }
+}
+
 // Loads a skinned equipment mesh and rebinds it onto an already-loaded
 // skeleton, discarding the duplicate skeleton the glTF brings with it. Only
 // correct if the equipment was authored against the same bone hierarchy/order

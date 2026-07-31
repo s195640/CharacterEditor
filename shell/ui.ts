@@ -27,6 +27,7 @@ export interface ControlPanel {
   setEquipmentState(label: string, equipped: boolean): void;
   setSunState(enabled: boolean): void;
   setPauseState(paused: boolean): void;
+  setFrameNumber(frame: number): void;
   resetControls(): void;
 }
 
@@ -91,6 +92,10 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   nextFrameButton.addEventListener("click", () => options.onStepFrame(1));
   frameStepRow.appendChild(nextFrameButton);
   panel.appendChild(frameStepRow);
+
+  const frameNumberDisplay = document.createElement("div");
+  frameNumberDisplay.className = "frame-number-display";
+  panel.appendChild(frameNumberDisplay);
 
   const equipmentHeading = document.createElement("h2");
   equipmentHeading.textContent = "Equipment";
@@ -174,6 +179,11 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   };
   setPauseState(false);
 
+  const setFrameNumber = (frame: number): void => {
+    frameNumberDisplay.textContent = `Frame: ${frame}`;
+  };
+  setFrameNumber(0);
+
   const resetControls = (): void => {
     sizeSlider.value = "1";
     speedSlider.slider.value = "1";
@@ -183,5 +193,5 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
     }
   };
 
-  return { setEquipmentState, setSunState, setPauseState, resetControls };
+  return { setEquipmentState, setSunState, setPauseState, setFrameNumber, resetControls };
 }

@@ -11,7 +11,13 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import type { AbstractMesh } from "@babylonjs/core";
-import { loadAnimationClip, loadCharacter, loadEquipment, loadProp } from "../core/characterLoader";
+import {
+  loadAnimationClip,
+  loadCharacter,
+  loadEquipment,
+  loadProp,
+  stopOrphanedAnimatables,
+} from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
 import { getBoneNode, scaleBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
@@ -126,7 +132,6 @@ async function main() {
     "mixamorig:LeftHand",
     new Vector3(Math.PI, 0, 0),
   );
-
   const equippables: EquippableItem[] = [
     { label: "Helmet", meshes: equipmentMeshes, equipped: false },
     { label: "Right Sword", meshes: [rightSwordMesh], equipped: false },
@@ -249,10 +254,17 @@ async function main() {
   // overwrites any manual bone scaling within a frame or two. Reapplying
   // every frame, after the animation system has run, makes our override win
   // instead of fighting it once at slider-input time.
+  //
+  // Also re-enforces stopOrphanedAnimatables every frame rather than
+  // sweeping once after loading -- see its doc comment in characterLoader.ts
+  // for why a one-shot sweep, even deferred to the next render frame,
+  // wasn't reliable here.
   scene.onBeforeRenderObservable.add(() => {
     for (const label of Object.keys(BODY_PART_BONES)) {
       applyBodyPart(label);
     }
+    stopOrphanedAnimatables(scene);
+    panel.setFrameNumber(animationController.getCurrentFrame());
   });
 
   // Doesn't reuse setBodyPart's before/after measurement: that dance exists
