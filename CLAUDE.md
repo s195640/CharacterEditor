@@ -19,10 +19,10 @@ below for how we keep that open without building for a guess.
 1. **Plan Mode for anything non-trivial.** Explore, propose, wait for approval. If
    execution hits something the approved plan didn't cover, stop and ask rather than
    improvising.
-2. **Git: read-only freely, never write.** `status`/`diff`/`log`/`show`/`branch -l`
-   are always fine. Never run a command that writes to the repo (`add`, `commit`,
-   `push`, `merge`, `rebase`, `checkout`/`switch` that changes branch or working-tree
-   state) unless explicitly asked for that specific action in that session.
+2. **Git writes are branch-gated, not fully manual — see Git Workflow below.**
+   Never commit or merge directly to `main`. Never force-push, skip hooks
+   (`--no-verify`), bypass signing, or rewrite already-pushed history, regardless
+   of the standing permission below.
 3. **Don't build undesigned features.** This explicitly includes integration
    mechanisms — no plugin API, embed SDK, or publish pipeline until a real second
    consumer exists with real requirements. Speculative integration surface is scope
@@ -101,6 +101,41 @@ tried and rejected, how it was verified.
 even if something in it is later superseded or found inaccurate — that correction
 belongs in whichever milestone's file is current when the correction happens, not
 backfilled into history.
+
+---
+
+## Git Workflow
+
+Every discrete unit of work — a full milestone or a smaller patch-level change —
+follows the same branch-per-version flow. Branches are short-lived rollback
+insurance, not a permanent parallel history: they always get merged back into
+`main` and deleted, never left to diverge.
+
+1. **Bump `VERSION` first** (per the Versioning rules above — Y and reset Z for
+   a new milestone, otherwise Z for a patch-level change within the current
+   milestone).
+2. **Create a branch named exactly the new version** (e.g. `0.2.0`) off `main`.
+3. **Make the changes on that branch, committing frequently** — small, logical
+   commits as work progresses, not one bundle at the end.
+4. **Push the branch to origin.**
+5. **Verify the work actually runs** — build/typecheck must pass, and anything
+   user-facing must be demonstrated working (run it, don't just assert it), per
+   whatever definition of done applies to the task.
+6. **Once verified, merge to `main`, push `main`, and delete the branch** (local
+   and remote) — this step doesn't need a separate ask; verification passing
+   *is* the approval. If verification fails, the branch stays unmerged and
+   broken on its own branch — `main` is never touched by unverified work.
+
+Standing safety rules that still apply regardless of the above: never
+force-push, never skip hooks or bypass signing, never rewrite history already
+pushed to a branch, and always confirm before anything destructive that isn't
+part of this flow (e.g. deleting a branch that turned out to have unmerged work
+worth keeping).
+
+The `CharacterEditor.code-workspace` "Git: Push" task (add-all, commit "Release
+version X", push) predates this flow and assumed direct-to-main commits. It
+still exists as a manual fallback for edits made outside a Claude session, but
+Claude follows the branch flow above instead of using it.
 
 ---
 
