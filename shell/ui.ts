@@ -3,6 +3,12 @@ export interface EquipmentItemOptions {
   onToggle: () => void;
 }
 
+export interface BodyPartOptions {
+  label: string;
+  onLengthChange: (value: number) => void;
+  onWidthChange: (value: number) => void;
+}
+
 export interface ControlPanelOptions {
   animationNames: string[];
   onSelectAnimation: (name: string) => void;
@@ -10,11 +16,32 @@ export interface ControlPanelOptions {
   onExport: () => void;
   onToggleSun: () => void;
   onSizeChange: (value: number) => void;
+  bodyParts: BodyPartOptions[];
 }
 
 export interface ControlPanel {
   setEquipmentState(label: string, equipped: boolean): void;
   setSunState(enabled: boolean): void;
+}
+
+function createLabeledSlider(labelText: string, onInput: (value: number) => void): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "slider-row";
+
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  row.appendChild(label);
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0.5";
+  slider.max = "2";
+  slider.step = "0.1";
+  slider.value = "1";
+  slider.addEventListener("input", () => onInput(Number(slider.value)));
+  row.appendChild(slider);
+
+  return row;
 }
 
 export function createControlPanel(options: ControlPanelOptions): ControlPanel {
@@ -56,6 +83,19 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   sizeSlider.value = "1";
   sizeSlider.addEventListener("input", () => options.onSizeChange(Number(sizeSlider.value)));
   panel.appendChild(sizeSlider);
+
+  const bodyShapeHeading = document.createElement("h2");
+  bodyShapeHeading.textContent = "Body Shape";
+  panel.appendChild(bodyShapeHeading);
+
+  for (const part of options.bodyParts) {
+    const partLabel = document.createElement("div");
+    partLabel.className = "body-part-label";
+    partLabel.textContent = part.label;
+    panel.appendChild(partLabel);
+    panel.appendChild(createLabeledSlider("Length", part.onLengthChange));
+    panel.appendChild(createLabeledSlider("Width", part.onWidthChange));
+  }
 
   const lightingHeading = document.createElement("h2");
   lightingHeading.textContent = "Lighting";
