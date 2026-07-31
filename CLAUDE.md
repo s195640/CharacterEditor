@@ -161,10 +161,13 @@ second consumer exists yet to justify one):
   already-loaded skeleton (discarding the duplicate skeleton the glTF brings
   with it — only correct if authored against the same bone hierarchy/order,
   see `tools/make_equipment_placeholder.py`), **and reparents the mesh onto
-  the character's own `rootNode`** — the equipment glTF brings its own
-  unrelated root/armature hierarchy, so without reparenting, the mesh's own
-  world matrix never follows the character if it's later rescaled, even
-  though its skin deformation still references the right bones; `loadProp`
+  the character's own skinned mesh's parent** (i.e. wherever that mesh
+  actually sits, e.g. one level below `rootNode` — not `rootNode` directly).
+  This matters: the character's mesh and the skeleton's bones share one
+  reference frame; parenting equipment onto `rootNode` directly puts its
+  transform in a *different* frame than the skin matrices operate in and
+  corrupts the result (confirmed the hard way — bounding info showed a
+  24-unit box ~160 units from the character before this fix); `loadProp`
   loads a rigid unskinned prop and parents it to `bone.getTransformNode()` —
   plain reparenting, not `attachToBone`, because the exporter's scene-graph
   walk doesn't see attachToBone'd nodes at all — compensating scale by the
@@ -172,15 +175,22 @@ second consumer exists yet to justify one):
   keeps tracking proportionally if the character is rescaled afterward),
   `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
-  clips, `stop()`, `list()`), `exporter.ts` (`exportCharacter` calls
-  `GLTF2Export.GLBAsync`, excluding nodes via a caller-supplied
-  `shouldExportNode`, and builds a minimal manifest — source character file,
-  included animation names, equipped item names; returns the raw `GLTFData` +
-  manifest rather than triggering a download itself, since "how to deliver the
-  export" is a Shell/host concern, not Core's), `types.ts`. Operates on Babylon
-  `Scene`/`AnimationGroup` objects (the rendering engine is a locked
-  architectural decision, not "app UI") but has no DOM/UI-panel code and no
-  assumptions about how it's hosted.
+  clips, `stop()`, `list()`), `bodyShape.ts` (`scaleBodyPart(skeleton,
+  boneNames, length, width)` reshapes a body part by scaling each named
+  bone's `TransformNode` — Y is the bone-length axis and X/Z are width,
+  confirmed rig-wide by inspecting bone-to-child local translations, not
+  assumed. Must be reapplied every frame via `scene.onBeforeRenderObservable`,
+  not just once on slider input: the retargeted animations' baked glTF data
+  includes a constant scale=1 track on every bone, which silently overwrites
+  any one-time manual scaling within a frame or two), `exporter.ts`
+  (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
+  caller-supplied `shouldExportNode`, and builds a minimal manifest — source
+  character file, included animation names, equipped item names; returns the
+  raw `GLTFData` + manifest rather than triggering a download itself, since
+  "how to deliver the export" is a Shell/host concern, not Core's), `types.ts`.
+  Operates on Babylon `Scene`/`AnimationGroup` objects (the rendering engine is
+  a locked architectural decision, not "app UI") but has no DOM/UI-panel code
+  and no assumptions about how it's hosted.
 - `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
   animations) and `E` (toggle helmet) listeners, and call into `core/`.
@@ -193,8 +203,14 @@ second consumer exists yet to justify one):
   key) stays in sync. Sizing: `main.ts` captures `character.rootNode.scaling`
   once at load as the "1.0" baseline, then sets `rootNode.scaling =
   baseline.scale(sliderValue)` on input — equipment scales proportionally for
-  free (see `loadEquipment`/`loadProp` above). `main.ts` also triggers the
-  actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
+  free (see `loadEquipment`/`loadProp` above). Body Shape: a "Body Shape"
+  section with a Length + Width slider each for Arms, Legs, Head, and Belly
+  (bone-name groups defined in `main.ts` as `BODY_PART_BONES` — Shell's
+  concern, not Core's, same as equipment bone names like
+  `"mixamorig:RightHand"`), calling `scaleBodyPart` every frame via
+  `scene.onBeforeRenderObservable` (see `bodyShape.ts` above for why "every
+  frame" instead of once). `main.ts` also triggers the actual downloads after
+  calling `exportCharacter` (`gltfData.downloadFiles()`
   for the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
   `shell/public/characters/*.glb` — converted character/animation/equipment
   assets, served as static files by Vite.
