@@ -1,4 +1,16 @@
-import type { Skeleton } from "@babylonjs/core";
+import type { Skeleton, TransformNode } from "@babylonjs/core";
+
+export function getBoneNode(skeleton: Skeleton, boneName: string): TransformNode {
+  const bone = skeleton.bones.find((b) => b.name === boneName);
+  if (!bone) {
+    throw new Error(`Bone "${boneName}" not found on skeleton`);
+  }
+  const boneNode = bone.getTransformNode();
+  if (!boneNode) {
+    throw new Error(`Bone "${boneName}" has no linked transform node`);
+  }
+  return boneNode;
+}
 
 // Scales a group of bones to reshape a body part. Y is the bone-length axis
 // and X/Z are width for every bone checked in this rig (arms, legs, spine,
@@ -14,14 +26,6 @@ export function scaleBodyPart(
   width: number,
 ): void {
   for (const boneName of boneNames) {
-    const bone = skeleton.bones.find((b) => b.name === boneName);
-    if (!bone) {
-      throw new Error(`Bone "${boneName}" not found on skeleton`);
-    }
-    const boneNode = bone.getTransformNode();
-    if (!boneNode) {
-      throw new Error(`Bone "${boneName}" has no linked transform node`);
-    }
-    boneNode.scaling.set(width, length, width);
+    getBoneNode(skeleton, boneName).scaling.set(width, length, width);
   }
 }
