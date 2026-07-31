@@ -109,11 +109,24 @@ async function main() {
     { label: "Right Sword", meshes: [rightSwordMesh], equipped: false },
     { label: "Left Sword", meshes: [leftSwordMesh], equipped: false },
   ];
-  equippables.forEach((item) => item.meshes.forEach((mesh) => shadowGenerator.addShadowCaster(mesh)));
 
+  // Equipment only becomes a shadow caster while actually equipped. A
+  // disabled mesh's world matrix isn't kept up to date, so the shadow
+  // generator's frustum auto-sizing (which factors in every registered
+  // caster's bounding info regardless of visibility) picked up stale/enormous
+  // bounds from hidden items -- most visibly the swords, whose local scale
+  // compensates a ~100x parent scale difference -- and blurred the whole
+  // shadow map.
   const setEquippableState = (item: EquippableItem, value: boolean) => {
     item.equipped = value;
-    item.meshes.forEach((mesh) => mesh.setEnabled(value));
+    item.meshes.forEach((mesh) => {
+      mesh.setEnabled(value);
+      if (value) {
+        shadowGenerator.addShadowCaster(mesh);
+      } else {
+        shadowGenerator.removeShadowCaster(mesh);
+      }
+    });
     panel.setEquipmentState(item.label, value);
   };
 
