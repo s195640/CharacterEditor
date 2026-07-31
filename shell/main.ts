@@ -59,6 +59,12 @@ ambientLight.intensity = 0.6;
 const sunLight = new DirectionalLight("sun", new Vector3(-1, -2, -1), scene);
 sunLight.position = new Vector3(5, 10, 5);
 sunLight.intensity = 0.8;
+// Fixed frustum size, rather than the default per-frame auto-fit to every
+// shadow caster's current bounding box: a skinned mesh's bounding info can
+// balloon based on the whole skeleton's pose even when barely any of it
+// actually influences the mesh (seen with the Helmet, weighted to one bone
+// out of 65), inflating the frustum and blurring the whole shadow map.
+sunLight.shadowFrustumSize = 6;
 
 const shadowGenerator = new ShadowGenerator(1024, sunLight);
 shadowGenerator.useBlurExponentialShadowMap = true;
