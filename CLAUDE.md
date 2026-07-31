@@ -239,8 +239,19 @@ second consumer exists yet to justify one):
   every frame via `scene.onBeforeRenderObservable` (see `bodyShape.ts` above
   for why "every frame" instead of once); slider callbacks go through a
   `setBodyPart` wrapper that also applies the ground-height compensation
-  this list's leg/foot entries need (see `bodyShape.ts` above). `main.ts`
-  also triggers
+  this list's leg/foot entries need (see `bodyShape.ts` above). A Reset
+  button (`main.ts`'s `resetAll`) restores Size, every Body Shape slider,
+  equipment, sun, and animation to their load-time defaults in one step —
+  it sets the known-default values directly (scale 1, `groundOffset = 0`,
+  `rootNode.position.y = baseRootY`) rather than routing through
+  `setBodyPart`'s before/after measurement, since that measurement is
+  pose-dependent (accurate for one incremental change, but doesn't cancel
+  exactly when undoing several at once from a different animation pose
+  than they were originally set from — confirmed: resetting from Running
+  left a residual ~0.5 unit offset when going through `setBodyPart`, gone
+  once Reset set the defaults directly instead). `panel.resetControls()`
+  syncs the sliders' visual positions back to 1 without re-triggering
+  their input handlers. `main.ts` also triggers
   the actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
   for the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
   `shell/public/characters/*.glb` — converted character/animation/equipment

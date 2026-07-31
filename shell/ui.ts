@@ -17,14 +17,19 @@ export interface ControlPanelOptions {
   onToggleSun: () => void;
   onSizeChange: (value: number) => void;
   bodyParts: BodyPartOptions[];
+  onReset: () => void;
 }
 
 export interface ControlPanel {
   setEquipmentState(label: string, equipped: boolean): void;
   setSunState(enabled: boolean): void;
+  resetControls(): void;
 }
 
-function createLabeledSlider(labelText: string, onInput: (value: number) => void): HTMLElement {
+function createLabeledSlider(
+  labelText: string,
+  onInput: (value: number) => void,
+): { row: HTMLElement; slider: HTMLInputElement } {
   const row = document.createElement("div");
   row.className = "slider-row";
 
@@ -41,12 +46,17 @@ function createLabeledSlider(labelText: string, onInput: (value: number) => void
   slider.addEventListener("input", () => onInput(Number(slider.value)));
   row.appendChild(slider);
 
-  return row;
+  return { row, slider };
 }
 
 export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   const panel = document.createElement("div");
   panel.id = "control-panel";
+
+  const resetButton = document.createElement("button");
+  resetButton.textContent = "Reset";
+  resetButton.addEventListener("click", () => options.onReset());
+  panel.appendChild(resetButton);
 
   const animationsHeading = document.createElement("h2");
   animationsHeading.textContent = "Animations";
@@ -88,13 +98,17 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   bodyShapeHeading.textContent = "Body Shape";
   panel.appendChild(bodyShapeHeading);
 
+  const bodyPartSliders: { length: HTMLInputElement; width: HTMLInputElement }[] = [];
   for (const part of options.bodyParts) {
     const partLabel = document.createElement("div");
     partLabel.className = "body-part-label";
     partLabel.textContent = part.label;
     panel.appendChild(partLabel);
-    panel.appendChild(createLabeledSlider("Length", part.onLengthChange));
-    panel.appendChild(createLabeledSlider("Width", part.onWidthChange));
+    const lengthSlider = createLabeledSlider("Length", part.onLengthChange);
+    const widthSlider = createLabeledSlider("Width", part.onWidthChange);
+    panel.appendChild(lengthSlider.row);
+    panel.appendChild(widthSlider.row);
+    bodyPartSliders.push({ length: lengthSlider.slider, width: widthSlider.slider });
   }
 
   const lightingHeading = document.createElement("h2");
@@ -132,5 +146,13 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   };
   setSunState(true);
 
-  return { setEquipmentState, setSunState };
+  const resetControls = (): void => {
+    sizeSlider.value = "1";
+    for (const sliders of bodyPartSliders) {
+      sliders.length.value = "1";
+      sliders.width.value = "1";
+    }
+  };
+
+  return { setEquipmentState, setSunState, resetControls };
 }

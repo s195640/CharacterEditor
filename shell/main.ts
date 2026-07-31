@@ -238,6 +238,29 @@ async function main() {
     }
   });
 
+  // Doesn't reuse setBodyPart's before/after measurement: that dance exists
+  // to cancel drift caused BY a scale change, measured relative to whatever
+  // pose the character happens to be in at that moment -- accurate for one
+  // incremental adjustment, but not exact when undoing several at once from
+  // a different animation pose than they were originally set from (a leg
+  // scaled up while roughly vertical in Idle doesn't cancel by the same
+  // vertical amount if unscaled while swung out mid-stride in Running).
+  // Reset already knows the true defaults outright, so it sets them directly
+  // instead of re-deriving them through measurement.
+  const resetAll = () => {
+    setSize(1);
+    for (const label of Object.keys(BODY_PART_BONES)) {
+      bodyPartState[label] = { length: 1, width: 1 };
+      applyBodyPart(label);
+    }
+    groundOffset = 0;
+    character.rootNode.position.y = baseRootY;
+    equippables.forEach((item) => setEquippableState(item, false));
+    setSunEnabled(true);
+    animationController.play();
+    panel.resetControls();
+  };
+
   const handleExport = async () => {
     const result = await exportCharacter(scene, {
       sourceCharacter: CHARACTER_FILE,
@@ -261,6 +284,7 @@ async function main() {
     },
     onToggleSun: () => setSunEnabled(!sunEnabled),
     onSizeChange: (value) => setSize(value),
+    onReset: () => resetAll(),
     bodyParts: Object.keys(BODY_PART_BONES).map((label) => ({
       label,
       onLengthChange: (value: number) => setBodyPart(label, value, bodyPartState[label].width),
