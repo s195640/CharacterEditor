@@ -69,6 +69,11 @@ export async function loadEquipment(
   for (const mesh of meshesWithGeometry) {
     mesh.skeleton = targetSkeleton;
     mesh.parent = characterRootNode;
+    // The mesh's cached bounding info still reflects the disposed duplicate
+    // skeleton it was imported with. Left stale, it silently inflates
+    // anything that reads bounds (e.g. a shadow generator's frustum
+    // auto-sizing), even while the mesh renders correctly.
+    mesh.refreshBoundingInfo(true, false);
   }
   for (const skeleton of result.skeletons) {
     skeleton.dispose();
