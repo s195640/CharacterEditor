@@ -193,11 +193,23 @@ second consumer exists yet to justify one):
   out unreliable for a bone-linked node (read back as a bare `1` at rest,
   didn't scale proportionally once actually stretched) — confirmed by
   comparing predicted vs. actual foot-drop across several slider values,
-  which diverged non-linearly. The robust fix measures the foot's actual
-  world position every frame and cancels out whatever moved it, regardless
-  of which bone caused it — this is also why splitting Legs into Upper/Lower
-  and adding a separate Feet control needed no changes to the compensation
-  logic at all, only to the bone-name list),
+  which diverged non-linearly. A second attempt measured the foot's world
+  position every frame and forced it to a fixed height continuously; that
+  "worked" in Idle but fought the character's own gait during Running (a
+  run cycle lifts each foot off the ground for part of its cycle by design)
+  — locking the left foot flat forced the whole character to bob to
+  compensate, which threw the right foot's independent swing out of sync
+  and dropped it below the ground (confirmed: right toe swung from -0.62 to
+  +0.62 world-Y over one running cycle with zero body-shape sliders
+  touched). The robust fix measures the foot's height immediately before
+  and after applying a scale change — both reads forced via
+  `computeWorldMatrix(true)` and taken synchronously within the same tick,
+  so the delta reflects only the scale change, not gait motion — and
+  accumulates that delta into `rootNode.position.y`. This runs only from the
+  slider callbacks, not the per-frame loop, so gait motion is left
+  untouched; this is also why splitting Legs into Upper/Lower and adding a
+  separate Feet control needed no changes to the compensation logic at all,
+  only to the bone-name list),
   `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
@@ -225,8 +237,10 @@ second consumer exists yet to justify one):
   `main.ts` as `BODY_PART_BONES` — Shell's concern, not Core's, same as
   equipment bone names like `"mixamorig:RightHand"`), calling `scaleBodyPart`
   every frame via `scene.onBeforeRenderObservable` (see `bodyShape.ts` above
-  for why "every frame" instead of once, and for the ground-height
-  compensation this list's leg/foot entries need). `main.ts` also triggers
+  for why "every frame" instead of once); slider callbacks go through a
+  `setBodyPart` wrapper that also applies the ground-height compensation
+  this list's leg/foot entries need (see `bodyShape.ts` above). `main.ts`
+  also triggers
   the actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
   for the `.glb`, a small Blob-anchor helper for `character.manifest.json`).
   `shell/public/characters/*.glb` — converted character/animation/equipment

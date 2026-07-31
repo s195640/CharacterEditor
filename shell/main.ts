@@ -187,14 +187,43 @@ async function main() {
   // TransformNode (it read back a bare 1 instead of the real parent-chain
   // scale at rest, and didn't scale proportionally once actually stretched --
   // confirmed by comparing the predicted vs. actual foot-drop across several
-  // slider values, which diverged non-linearly instead of matching). Reading
-  // the foot's actual world position and cancelling out whatever just moved
-  // it sidesteps needing any of that to be right at all.
+  // slider values, which diverged non-linearly instead of matching).
+  //
+  // A second attempt measured the foot's world position every frame and
+  // forced it to a fixed height continuously -- which "worked" in Idle, but
+  // during Running drove the right foot as low as -0.62 world-Y with zero
+  // body-shape sliders touched at all (confirmed by sampling both toes over
+  // a full running cycle). A walk/run gait lifts each foot off the ground
+  // for part of its cycle by design; locking the left foot flat on every
+  // frame fights that natural motion and forces the whole character to bob
+  // to compensate, which then throws the right foot's independent swing out
+  // of sync since only the left foot was ever measured.
+  //
+  // Instead, measure the foot's height immediately before and after applying
+  // a scale change -- both reads happen synchronously within the same tick,
+  // before the animation advances, so the delta reflects only the effect of
+  // the new scale, not gait motion -- and accumulate that into the root
+  // offset. Per-frame, only the scale values themselves need reapplying (see
+  // below); height is otherwise left alone so the animation's own gait can
+  // move the feet freely.
   const leftToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:LeftToeBase");
-  const baselineFootY = leftToeBaseNode.getAbsolutePosition().y;
-  const updateGroundHeightCompensation = () => {
-    const uncompensatedFootY = leftToeBaseNode.getAbsolutePosition().y - character.rootNode.position.y;
-    character.rootNode.position.y = baselineFootY - uncompensatedFootY;
+  const baseRootY = character.rootNode.position.y;
+  let groundOffset = 0;
+  // getAbsolutePosition() reads a cached world matrix that's only refreshed
+  // during a render pass -- reading it twice synchronously (before/after,
+  // with no render in between) would return the same stale value both
+  // times, always measuring a delta of zero. Force a recompute on each read.
+  const measureLeftToeY = () => {
+    leftToeBaseNode.computeWorldMatrix(true);
+    return leftToeBaseNode.getAbsolutePosition().y;
+  };
+  const setBodyPart = (label: string, length: number, width: number) => {
+    const before = measureLeftToeY();
+    bodyPartState[label] = { length, width };
+    applyBodyPart(label);
+    const after = measureLeftToeY();
+    groundOffset += before - after;
+    character.rootNode.position.y = baseRootY + groundOffset;
   };
 
   // The retargeted animations' baked glTF data apparently includes a
@@ -207,7 +236,6 @@ async function main() {
     for (const label of Object.keys(BODY_PART_BONES)) {
       applyBodyPart(label);
     }
-    updateGroundHeightCompensation();
   });
 
   const handleExport = async () => {
@@ -235,14 +263,8 @@ async function main() {
     onSizeChange: (value) => setSize(value),
     bodyParts: Object.keys(BODY_PART_BONES).map((label) => ({
       label,
-      onLengthChange: (value: number) => {
-        bodyPartState[label].length = value;
-        applyBodyPart(label);
-      },
-      onWidthChange: (value: number) => {
-        bodyPartState[label].width = value;
-        applyBodyPart(label);
-      },
+      onLengthChange: (value: number) => setBodyPart(label, value, bodyPartState[label].width),
+      onWidthChange: (value: number) => setBodyPart(label, bodyPartState[label].length, value),
     })),
   });
   equippables.forEach((item) => setEquippableState(item, false));
