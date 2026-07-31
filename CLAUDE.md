@@ -201,15 +201,29 @@ second consumer exists yet to justify one):
   compensate, which threw the right foot's independent swing out of sync
   and dropped it below the ground (confirmed: right toe swung from -0.62 to
   +0.62 world-Y over one running cycle with zero body-shape sliders
-  touched). The robust fix measures the foot's height immediately before
-  and after applying a scale change — both reads forced via
-  `computeWorldMatrix(true)` and taken synchronously within the same tick,
-  so the delta reflects only the scale change, not gait motion — and
-  accumulates that delta into `rootNode.position.y`. This runs only from the
-  slider callbacks, not the per-frame loop, so gait motion is left
-  untouched; this is also why splitting Legs into Upper/Lower and adding a
-  separate Feet control needed no changes to the compensation logic at all,
-  only to the bone-name list),
+  touched). A third attempt measured only the left foot's before/after delta
+  on slider change (both reads forced via `computeWorldMatrix(true)` and
+  taken synchronously within the same tick, so the delta reflects only the
+  scale change, not gait motion) and added it once into `rootNode.position.y`
+  — solid for gait, but left two gaps: mid-stride the legs aren't vertical,
+  so the same scale change drops the left and right foot by slightly
+  different amounts, and canceling one exactly left the other dipping
+  slightly into the ground; and the offset was stored as a fixed world-space
+  number, so changing Size afterward rescaled the actual drop but not the
+  stored offset meant to cancel it, visibly lifting or sinking the character.
+  The current fix averages both feet's measured delta (reduces, doesn't
+  perfectly eliminate, the dip — a single root-height adjustment can't
+  satisfy two independently-posed feet exactly) and stores the accumulated
+  offset normalized to Size 1.0 (`groundOffsetAtSize1`), re-multiplying by
+  the current Size (`sizeValue`) every time either a body-shape slider or
+  Size itself changes (`applyRootTransform`, called from both `setSize` and
+  `setBodyPart`) — Size is a uniform scale set directly by this code, not
+  read back from an unreliable engine property, so multiplying by it is
+  exact, unlike the first attempt's `absoluteScaling` formula. This runs
+  only from the slider callbacks, not the per-frame loop, so gait motion is
+  left untouched; this is also why splitting Legs into Upper/Lower and
+  adding a separate Feet control needed no changes to the compensation logic
+  at all, only to the bone-name list),
   `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
@@ -242,8 +256,8 @@ second consumer exists yet to justify one):
   this list's leg/foot entries need (see `bodyShape.ts` above). A Reset
   button (`main.ts`'s `resetAll`) restores Size, every Body Shape slider,
   equipment, sun, and animation to their load-time defaults in one step —
-  it sets the known-default values directly (scale 1, `groundOffset = 0`,
-  `rootNode.position.y = baseRootY`) rather than routing through
+  it sets the known-default values directly (`groundOffsetAtSize1 = 0`,
+  Size `1`) rather than routing through
   `setBodyPart`'s before/after measurement, since that measurement is
   pose-dependent (accurate for one incremental change, but doesn't cancel
   exactly when undoing several at once from a different animation pose

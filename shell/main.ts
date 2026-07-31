@@ -160,11 +160,6 @@ async function main() {
     panel.setSunState(sunEnabled);
   };
 
-  const baseScale = character.rootNode.scaling.clone();
-  const setSize = (value: number) => {
-    character.rootNode.scaling = baseScale.scale(value);
-  };
-
   const bodyPartState = Object.fromEntries(
     Object.keys(BODY_PART_BONES).map((label) => [label, { length: 1, width: 1 }]),
   );
@@ -199,31 +194,53 @@ async function main() {
   // to compensate, which then throws the right foot's independent swing out
   // of sync since only the left foot was ever measured.
   //
-  // Instead, measure the foot's height immediately before and after applying
-  // a scale change -- both reads happen synchronously within the same tick,
-  // before the animation advances, so the delta reflects only the effect of
-  // the new scale, not gait motion -- and accumulate that into the root
-  // offset. Per-frame, only the scale values themselves need reapplying (see
-  // below); height is otherwise left alone so the animation's own gait can
-  // move the feet freely.
+  // A third attempt measured only the left foot's before/after delta on
+  // slider change and added it once into the root offset. This avoids
+  // fighting gait, but still has two gaps: (1) during a mid-stride pose the
+  // legs aren't vertical, so the same scale change produces a slightly
+  // different vertical drop for the left and right foot -- canceling one
+  // exactly leaves the other a little off, seen as the toes dipping slightly
+  // into the ground; and (2) the compensation was stored as a fixed
+  // world-space offset, so changing Size afterward rescaled the actual drop
+  // but not the stored offset meant to cancel it, visibly lifting or sinking
+  // the character. Averaging both feet's measured delta reduces (1). Storing
+  // the offset normalized to Size 1.0 and re-multiplying by the current Size
+  // whenever either Size or a body-shape slider changes fixes (2) -- Size is
+  // a uniform scale we set ourselves (not read back from an unreliable
+  // engine property), so multiplying by it is exact, unlike the earlier
+  // formula attempt that relied on reading back scaling from Babylon.
   const leftToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:LeftToeBase");
+  const rightToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:RightToeBase");
   const baseRootY = character.rootNode.position.y;
-  let groundOffset = 0;
+  const baseScale = character.rootNode.scaling.clone();
+  let sizeValue = 1;
+  let groundOffsetAtSize1 = 0;
+  const applyRootTransform = () => {
+    character.rootNode.scaling = baseScale.scale(sizeValue);
+    character.rootNode.position.y = baseRootY + groundOffsetAtSize1 * sizeValue;
+  };
   // getAbsolutePosition() reads a cached world matrix that's only refreshed
   // during a render pass -- reading it twice synchronously (before/after,
   // with no render in between) would return the same stale value both
   // times, always measuring a delta of zero. Force a recompute on each read.
-  const measureLeftToeY = () => {
-    leftToeBaseNode.computeWorldMatrix(true);
-    return leftToeBaseNode.getAbsolutePosition().y;
+  const measureFootY = (node: typeof leftToeBaseNode) => {
+    node.computeWorldMatrix(true);
+    return node.getAbsolutePosition().y;
+  };
+  const setSize = (value: number) => {
+    sizeValue = value;
+    applyRootTransform();
   };
   const setBodyPart = (label: string, length: number, width: number) => {
-    const before = measureLeftToeY();
+    const beforeLeft = measureFootY(leftToeBaseNode);
+    const beforeRight = measureFootY(rightToeBaseNode);
     bodyPartState[label] = { length, width };
     applyBodyPart(label);
-    const after = measureLeftToeY();
-    groundOffset += before - after;
-    character.rootNode.position.y = baseRootY + groundOffset;
+    const afterLeft = measureFootY(leftToeBaseNode);
+    const afterRight = measureFootY(rightToeBaseNode);
+    const delta = (beforeLeft - afterLeft + (beforeRight - afterRight)) / 2;
+    groundOffsetAtSize1 += delta / sizeValue;
+    applyRootTransform();
   };
 
   // The retargeted animations' baked glTF data apparently includes a
@@ -248,13 +265,12 @@ async function main() {
   // Reset already knows the true defaults outright, so it sets them directly
   // instead of re-deriving them through measurement.
   const resetAll = () => {
-    setSize(1);
     for (const label of Object.keys(BODY_PART_BONES)) {
       bodyPartState[label] = { length: 1, width: 1 };
       applyBodyPart(label);
     }
-    groundOffset = 0;
-    character.rootNode.position.y = baseRootY;
+    groundOffsetAtSize1 = 0;
+    setSize(1);
     equippables.forEach((item) => setEquippableState(item, false));
     setSunEnabled(true);
     animationController.play();
