@@ -4,6 +4,7 @@ import {
   SceneLoaderAnimationGroupLoadingMode,
   type Scene,
   type Skeleton,
+  type TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
@@ -15,10 +16,17 @@ export async function loadCharacter(
   fileName: string,
 ): Promise<CharacterHandle> {
   const result = await SceneLoader.ImportMeshAsync("", rootUrl, fileName, scene);
+  // The parentless node is usually the loader's synthetic "__root__" mesh,
+  // not a TransformNode, so both arrays need checking.
+  const rootNode = [...result.meshes, ...result.transformNodes].find((node) => !node.parent);
+  if (!rootNode) {
+    throw new Error(`No root node found in ${fileName}`);
+  }
   return {
     meshes: result.meshes,
     skeletons: result.skeletons,
     animationGroups: result.animationGroups,
+    rootNode,
   };
 }
 
@@ -42,23 +50,30 @@ export async function loadAnimationClip(
 // Loads a skinned equipment mesh and rebinds it onto an already-loaded
 // skeleton, discarding the duplicate skeleton the glTF brings with it. Only
 // correct if the equipment was authored against the same bone hierarchy/order
-// as targetSkeleton (see tools/make_equipment_placeholder.py).
+// as targetSkeleton (see tools/make_equipment_placeholder.py). Reparents the
+// mesh onto the character's own root: the equipment glTF brings its own
+// unrelated root/armature hierarchy, so without this the mesh's base
+// transform never follows the character's root if it's later rescaled --
+// its skin deformation would still reference the right bones, but the mesh's
+// own world matrix would stay stuck at whatever scale it was originally
+// imported at.
 export async function loadEquipment(
   scene: Scene,
   rootUrl: string,
   fileName: string,
   targetSkeleton: Skeleton,
+  characterRootNode: TransformNode,
 ): Promise<AbstractMesh[]> {
   const result = await SceneLoader.ImportMeshAsync("", rootUrl, fileName, scene);
-  for (const mesh of result.meshes) {
-    if (mesh.skeleton) {
-      mesh.skeleton = targetSkeleton;
-    }
+  const meshesWithGeometry = result.meshes.filter((m) => m.getTotalVertices() > 0);
+  for (const mesh of meshesWithGeometry) {
+    mesh.skeleton = targetSkeleton;
+    mesh.parent = characterRootNode;
   }
   for (const skeleton of result.skeletons) {
     skeleton.dispose();
   }
-  return result.meshes;
+  return meshesWithGeometry;
 }
 
 // Loads a rigid (unskinned) prop mesh and parents it directly to the
