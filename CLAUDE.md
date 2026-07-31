@@ -56,12 +56,14 @@ make either path harder later.
 - Character rigging & animation source: Mixamo (humanoid only; quadrupeds out of
   scope for now).
 - Asset interchange format: glTF/GLB.
-- Rendering engine: **Babylon.js** (`@babylonjs/core` + `@babylonjs/loaders`),
-  decided in Milestone 1. Uses `SceneLoader.ImportMeshAsync` for glTF/GLB and
-  `AnimationGroup` for playback.
-- Equipment approach (agreed, not yet built): skinned mesh layers sharing the
+- Rendering engine: **Babylon.js** (`@babylonjs/core` + `@babylonjs/loaders` +
+  `@babylonjs/serializers`), decided in Milestone 1, export support added in
+  Milestone 5. Uses `SceneLoader.ImportMeshAsync` for glTF/GLB,
+  `AnimationGroup` for playback, `GLTF2Export.GLBAsync` for export.
+- Equipment approach (built in Milestone 3): skinned mesh layers sharing the
   character's skeleton for anything that deforms with the body (clothing, armor);
-  rigid props parented to a single bone for anything that doesn't (weapons, shields).
+  rigid props parented to a single bone for anything that doesn't (weapons, shields)
+  — the rigid-prop case is still unbuilt, only the skinned-layer case has been proven.
 - No backend, no auth, no persistence, no multiplayer — none of this exists yet and
   none of it should be introduced without a separate conversation first.
 
@@ -154,7 +156,12 @@ second consumer exists yet to justify one):
   authored against the same bone hierarchy/order, see
   `tools/make_equipment_placeholder.py`), `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
-  clips, `stop()`, `list()`), `types.ts`. Operates on Babylon
+  clips, `stop()`, `list()`), `exporter.ts` (`exportCharacter` calls
+  `GLTF2Export.GLBAsync`, excluding nodes via a caller-supplied
+  `shouldExportNode`, and builds a minimal manifest — source character file,
+  included animation names, equipped item names; returns the raw `GLTFData` +
+  manifest rather than triggering a download itself, since "how to deliver the
+  export" is a Shell/host concern, not Core's), `types.ts`. Operates on Babylon
   `Scene`/`AnimationGroup` objects (the rendering engine is a locked
   architectural decision, not "app UI") but has no DOM/UI-panel code and no
   assumptions about how it's hosted.
@@ -162,12 +169,14 @@ second consumer exists yet to justify one):
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
   animations) and `E` (toggle equipment) listeners, and call into `core/`.
   `ui.ts` + `ui.css` — the right-side control panel (`createControlPanel`):
-  plain DOM, no framework, one button per loaded animation plus an
-  equip/remove toggle; `main.ts` keeps a single `setEquipped` function that
-  both the `E` key and the panel button call, so the button label stays
-  correct regardless of which one triggered it. `shell/public/characters/*.glb`
-  — converted character/animation/equipment assets, served as static files by
-  Vite.
+  plain DOM, no framework, one button per loaded animation, an equip/remove
+  toggle, and an Export button; `main.ts` keeps a single `setEquipped`
+  function that both the `E` key and the panel button call, so the button
+  label stays correct regardless of which one triggered it. `main.ts` also
+  triggers the actual downloads after calling `exportCharacter`
+  (`gltfData.downloadFiles()` for the `.glb`, a small Blob-anchor helper for
+  `character.manifest.json`). `shell/public/characters/*.glb` — converted
+  character/animation/equipment assets, served as static files by Vite.
 - `assets/source/` — raw Mixamo FBX exports, kept for reproducibility of the
   conversion step.
 - `tools/convert_fbx_to_glb.py` — headless Blender script (`bpy`) that imports an
