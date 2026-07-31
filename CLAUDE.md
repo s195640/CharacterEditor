@@ -175,14 +175,27 @@ second consumer exists yet to justify one):
   keeps tracking proportionally if the character is rescaled afterward),
   `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
-  clips, `stop()`, `list()`), `bodyShape.ts` (`scaleBodyPart(skeleton,
-  boneNames, length, width)` reshapes a body part by scaling each named
-  bone's `TransformNode` — Y is the bone-length axis and X/Z are width,
-  confirmed rig-wide by inspecting bone-to-child local translations, not
-  assumed. Must be reapplied every frame via `scene.onBeforeRenderObservable`,
-  not just once on slider input: the retargeted animations' baked glTF data
-  includes a constant scale=1 track on every bone, which silently overwrites
-  any one-time manual scaling within a frame or two), `exporter.ts`
+  clips, `stop()`, `list()`), `bodyShape.ts` (`getBoneNode(skeleton, name)` —
+  shared lookup, throws if the bone or its linked `TransformNode` is missing;
+  `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
+  scaling each named bone's node — Y is the bone-length axis and X/Z are
+  width, confirmed rig-wide by inspecting bone-to-child local translations,
+  not assumed. Must be reapplied every frame via
+  `scene.onBeforeRenderObservable`, not just once on slider input: the
+  retargeted animations' baked glTF data includes a constant scale=1 track on
+  every bone, which silently overwrites any one-time manual scaling within a
+  frame or two. Legs specifically also need a **height compensation**,
+  applied in `main.ts`: lengthening a leg pushes the foot further from the
+  hip — i.e. down, through the ground — since legs hang downward, not the
+  character growing taller with feet planted. A first attempt derived the
+  expected compensation from rest-pose bone offsets times the hips'
+  `absoluteScaling`; that value turned out unreliable for a bone-linked node
+  (read back as a bare `1` at rest, didn't scale proportionally once actually
+  stretched) — confirmed by comparing predicted vs. actual foot-drop across
+  several slider values, which diverged non-linearly. The robust fix
+  measures the foot's actual world position each frame and cancels out
+  whatever the leg stretch just did to it, rather than trusting a formula),
+  `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
   character file, included animation names, equipped item names; returns the
