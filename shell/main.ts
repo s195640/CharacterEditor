@@ -46,15 +46,92 @@ interface EquippableItem {
   equipped: boolean;
 }
 
-const BODY_PART_BONES: Record<string, string[]> = {
-  "Upper Arm": ["mixamorig:LeftArm", "mixamorig:RightArm"],
-  "Lower Arm": ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"],
-  "Upper Leg": ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg"],
-  "Lower Leg": ["mixamorig:LeftLeg", "mixamorig:RightLeg"],
-  Neck: ["mixamorig:Neck"],
-  Feet: ["mixamorig:LeftFoot", "mixamorig:RightFoot"],
-  Head: ["mixamorig:Head"],
-  Belly: ["mixamorig:Spine1"],
+interface BodyPartConfig {
+  bones: string[];
+  tab: string;
+  // Bones form a hierarchy, so a parent's local scale unconditionally
+  // multiplies through every descendant (Babylon composes a child's world
+  // transform as parent.worldMatrix * child.localMatrix). When the
+  // rest-pose rotation between a parent and child bone is near-identity
+  // (confirmed per-pair by inspecting Walking.glb's glTF node rotations —
+  // under ~20 degrees), dividing this label's desired length/width by the
+  // parent label's CURRENT bodyPartState value exactly cancels that
+  // inherited scale, so this control only affects its own segment. Left
+  // undefined where the rest-pose rotation is too large for a simple
+  // diagonal-scale division to cancel cleanly without shearing (e.g. the
+  // ~65 degree ankle bend between Lower Leg and Upper Foot, or thumb's
+  // ~40 degree opposable rest orientation) -- those segments are left to
+  // cascade from their parent, same as Hips is deliberately left to
+  // cascade into everything below it as a "resize the whole area" macro
+  // control, matching this project's earlier Belly/Spine1 precedent.
+  parentLabel?: string;
+}
+
+// Order matters here: a label referencing `parentLabel` must be defined
+// AFTER that parent, so resetAll's single reset pass (see below) computes
+// each label's compensation against an already-reset parent instead of a
+// stale one.
+const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
+  Hips: { bones: ["mixamorig:Hips"], tab: "Torso" },
+  Spine: { bones: ["mixamorig:Spine"], tab: "Torso" },
+  Chest: { bones: ["mixamorig:LeftShoulder", "mixamorig:RightShoulder"], tab: "Torso" },
+  Neck: { bones: ["mixamorig:Neck"], tab: "Torso", parentLabel: "Spine" },
+  Head: { bones: ["mixamorig:Head"], tab: "Torso", parentLabel: "Neck" },
+
+  "Upper Leg": { bones: ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg"], tab: "Legs" },
+  "Lower Leg": {
+    bones: ["mixamorig:LeftLeg", "mixamorig:RightLeg"],
+    tab: "Legs",
+    parentLabel: "Upper Leg",
+  },
+
+  "Upper Foot": { bones: ["mixamorig:LeftFoot", "mixamorig:RightFoot"], tab: "Foot" },
+  "Middle Foot": { bones: ["mixamorig:LeftToeBase", "mixamorig:RightToeBase"], tab: "Foot" },
+  "Lower Foot": {
+    bones: ["mixamorig:LeftToe_End", "mixamorig:RightToe_End"],
+    tab: "Foot",
+    parentLabel: "Middle Foot",
+  },
+
+  "Upper Arm": {
+    bones: ["mixamorig:LeftArm", "mixamorig:RightArm"],
+    tab: "Arms",
+    parentLabel: "Chest",
+  },
+  "Lower Arm": {
+    bones: ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"],
+    tab: "Arms",
+    parentLabel: "Upper Arm",
+  },
+
+  Hand: { bones: ["mixamorig:LeftHand", "mixamorig:RightHand"], tab: "Hand", parentLabel: "Lower Arm" },
+
+  // Chain-root technique: each finger's 4 segments (…1/2/3/4) are chained
+  // bones with near-identity rest-pose rotation between them, so only the
+  // root segment is listed here -- scaling it cascades cleanly down the
+  // whole finger via hierarchy inheritance instead of compounding by
+  // setting the same scale on all 4 segments independently.
+  Thumb: { bones: ["mixamorig:LeftHandThumb1", "mixamorig:RightHandThumb1"], tab: "Fingers" },
+  Index: {
+    bones: ["mixamorig:LeftHandIndex1", "mixamorig:RightHandIndex1"],
+    tab: "Fingers",
+    parentLabel: "Hand",
+  },
+  Middle: {
+    bones: ["mixamorig:LeftHandMiddle1", "mixamorig:RightHandMiddle1"],
+    tab: "Fingers",
+    parentLabel: "Hand",
+  },
+  Ring: {
+    bones: ["mixamorig:LeftHandRing1", "mixamorig:RightHandRing1"],
+    tab: "Fingers",
+    parentLabel: "Hand",
+  },
+  Pinky: {
+    bones: ["mixamorig:LeftHandPinky1", "mixamorig:RightHandPinky1"],
+    tab: "Fingers",
+    parentLabel: "Hand",
+  },
 };
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
@@ -171,11 +248,19 @@ async function main() {
   };
 
   const bodyPartState = Object.fromEntries(
-    Object.keys(BODY_PART_BONES).map((label) => [label, { length: 1, width: 1 }]),
+    Object.keys(BODY_PART_CONFIG).map((label) => [label, { length: 1, width: 1 }]),
   );
   const applyBodyPart = (label: string) => {
+    const config = BODY_PART_CONFIG[label];
     const state = bodyPartState[label];
-    scaleBodyPart(character.skeletons[0], BODY_PART_BONES[label], state.length, state.width);
+    let length = state.length;
+    let width = state.width;
+    if (config.parentLabel) {
+      const parentState = bodyPartState[config.parentLabel];
+      length /= parentState.length;
+      width /= parentState.width;
+    }
+    scaleBodyPart(character.skeletons[0], config.bones, length, width);
   };
 
   // Any bone between the hips and the toe (Upper Leg, Lower Leg, Feet) hangs
@@ -245,7 +330,16 @@ async function main() {
     const beforeLeft = measureFootY(leftToeBaseNode);
     const beforeRight = measureFootY(rightToeBaseNode);
     bodyPartState[label] = { length, width };
-    applyBodyPart(label);
+    // Reapply every label, not just this one: other labels' compensation
+    // (see BODY_PART_CONFIG.parentLabel) divides by THIS label's state, so
+    // leaving them stale here would measure the ground-height delta against
+    // a transient, not-yet-settled pose -- the same class of bug already
+    // fixed once this session for a single-level case, now correctness-
+    // critical since dependencies run several levels deep (Head depends on
+    // Neck depends on Spine).
+    for (const otherLabel of Object.keys(BODY_PART_CONFIG)) {
+      applyBodyPart(otherLabel);
+    }
     const afterLeft = measureFootY(leftToeBaseNode);
     const afterRight = measureFootY(rightToeBaseNode);
     const delta = (beforeLeft - afterLeft + (beforeRight - afterRight)) / 2;
@@ -265,7 +359,7 @@ async function main() {
   // for why a one-shot sweep, even deferred to the next render frame,
   // wasn't reliable here.
   scene.onBeforeRenderObservable.add(() => {
-    for (const label of Object.keys(BODY_PART_BONES)) {
+    for (const label of Object.keys(BODY_PART_CONFIG)) {
       applyBodyPart(label);
     }
     stopOrphanedAnimatables(scene);
@@ -284,7 +378,7 @@ async function main() {
   const syncPauseUI = () => panel.setPauseState(animationController.isPaused());
 
   const resetAll = () => {
-    for (const label of Object.keys(BODY_PART_BONES)) {
+    for (const label of Object.keys(BODY_PART_CONFIG)) {
       bodyPartState[label] = { length: 1, width: 1 };
       applyBodyPart(label);
     }
@@ -334,8 +428,9 @@ async function main() {
       animationController.stepFrame(delta);
       syncPauseUI();
     },
-    bodyParts: Object.keys(BODY_PART_BONES).map((label) => ({
+    bodyParts: Object.keys(BODY_PART_CONFIG).map((label) => ({
       label,
+      tab: BODY_PART_CONFIG[label].tab,
       onLengthChange: (value: number) => setBodyPart(label, value, bodyPartState[label].width),
       onWidthChange: (value: number) => setBodyPart(label, bodyPartState[label].length, value),
     })),
