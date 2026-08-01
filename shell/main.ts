@@ -25,6 +25,7 @@ import { AnimationController } from "../core/animationController";
 import { captureRestTranslations, getBoneNode, scaleBodyPart, translateBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
 import {
+  bakeLegIKIntoAnimations,
   captureLegBaseline,
   createLegIKChain,
   type LegBaselineSample,
@@ -505,15 +506,50 @@ async function main() {
     panel.resetControls();
   };
 
+  // GLTF2Export only ever serializes each Animation's existing authored
+  // keyframes -- it never samples live scene/bone state (confirmed by
+  // reading glTFAnimation.js down to Animation._interpolate) -- so
+  // per-frame IK correction would silently vanish from the export unless
+  // it's explicitly baked into each clip's hip/knee rotation channels
+  // first. Bakes every clip (not just the one currently selected/visible),
+  // since the exported manifest lists every loaded animation, then
+  // restores the original (pre-bake) keys and the visible clip's exact
+  // frame in a finally block, so live in-app playback is unaffected by the
+  // moment the export finishes -- baking happens in-place on the same
+  // live Animation objects the running app itself uses for playback.
+  const IK_BAKE_FRAME_STEP = 1;
   const handleExport = async () => {
-    const result = await exportCharacter(scene, {
-      sourceCharacter: CHARACTER_FILE,
-      equippedItems: equippables.filter((item) => item.equipped).map((item) => item.label),
-      shouldExportNode: (node) =>
-        !equippables.some((item) => !item.equipped && item.meshes.some((mesh) => mesh === node)),
-    });
-    result.gltfData.downloadFiles();
-    downloadJson("character.manifest.json", result.manifest);
+    const selectedGroup = animationController.getCurrentGroup();
+    const originalFrame = selectedGroup?.getCurrentFrame();
+
+    const restoreBakedAnimations = [...legBaselines.entries()].map(([group, baseline]) =>
+      bakeLegIKIntoAnimations(
+        group,
+        skeleton,
+        ikSpace,
+        [
+          { hipBone: leftUpLegBone, kneeBone: leftLegBone, controller: leftLegIK, baseline: baseline.left },
+          { hipBone: rightUpLegBone, kneeBone: rightLegBone, controller: rightLegIK, baseline: baseline.right },
+        ],
+        IK_BAKE_FRAME_STEP,
+      ),
+    );
+
+    try {
+      const result = await exportCharacter(scene, {
+        sourceCharacter: CHARACTER_FILE,
+        equippedItems: equippables.filter((item) => item.equipped).map((item) => item.label),
+        shouldExportNode: (node) =>
+          !equippables.some((item) => !item.equipped && item.meshes.some((mesh) => mesh === node)),
+      });
+      result.gltfData.downloadFiles();
+      downloadJson("character.manifest.json", result.manifest);
+    } finally {
+      restoreBakedAnimations.forEach((restore) => restore());
+      if (selectedGroup && originalFrame !== undefined) {
+        selectedGroup.goToFrame(originalFrame);
+      }
+    }
   };
 
   const panel = createControlPanel({
