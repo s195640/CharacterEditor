@@ -414,6 +414,13 @@ async function main() {
   const bodyPartState = Object.fromEntries(
     Object.keys(BODY_PART_CONFIG).map((label) => [label, 1]),
   );
+  // Gates whether leg IK needs to run at all -- see onBeforeRenderObservable
+  // and handleExport below. A customization to EITHER segment requires IK
+  // to keep that leg's foot grounded, since one BoneIKController solves
+  // both bones of a side together, not independently. Both legs share the
+  // same bodyPartState values (no separate left/right customization
+  // exists), so one shared check gates both.
+  const legsAreCustomized = () => bodyPartState["Upper Leg"] !== 1 || bodyPartState["Lower Leg"] !== 1;
   const applyBodyPart = (label: string) => {
     const config = BODY_PART_CONFIG[label];
     const length = bodyPartState[label];
@@ -480,12 +487,25 @@ async function main() {
     // solve below would read last frame's stale hip/knee positions rather
     // than this frame's already-evaluated animation (see legIK.ts).
     syncBonesFromLinkedTransformNodes(skeleton);
-    const group = animationController.getCurrentGroup();
-    const baseline = group ? legBaselines.get(group) : undefined;
-    if (group && baseline) {
-      const frame = group.getCurrentFrame();
-      updateLegIK(leftLegIK, ikSpace, leftUpLegBone, sampleLegBaseline(baseline.left, frame));
-      updateLegIK(rightLegIK, ikSpace, rightUpLegBone, sampleLegBaseline(baseline.right, frame));
+    // Only actually solve IK when the leg chain is customized. With
+    // nothing customized, the authored rotation the sync above just put on
+    // the bone IS already exactly correct -- running IK unconditionally
+    // instead replaced it every frame with BoneIKController's law-of-cosines
+    // RECONSTRUCTION, calibrated by eye against a handful of sampled frames
+    // (bendAxis/poleAngle), which is not proven exact for every frame of
+    // every clip (a real leg's knee/hip twist varies across a gait cycle in
+    // ways a single constant can't fully reproduce) -- confirmed as the
+    // cause of a persistent, real deviation from the original animation
+    // even at default proportions, not a calibration-precision problem to
+    // chase further.
+    if (legsAreCustomized()) {
+      const group = animationController.getCurrentGroup();
+      const baseline = group ? legBaselines.get(group) : undefined;
+      if (group && baseline) {
+        const frame = group.getCurrentFrame();
+        updateLegIK(leftLegIK, ikSpace, leftUpLegBone, sampleLegBaseline(baseline.left, frame));
+        updateLegIK(rightLegIK, ikSpace, rightUpLegBone, sampleLegBaseline(baseline.right, frame));
+      }
     }
   });
 
@@ -522,18 +542,25 @@ async function main() {
     const selectedGroup = animationController.getCurrentGroup();
     const originalFrame = selectedGroup?.getCurrentFrame();
 
-    const restoreBakedAnimations = [...legBaselines.entries()].map(([group, baseline]) =>
-      bakeLegIKIntoAnimations(
-        group,
-        skeleton,
-        ikSpace,
-        [
-          { hipBone: leftUpLegBone, kneeBone: leftLegBone, controller: leftLegIK, baseline: baseline.left },
-          { hipBone: rightUpLegBone, kneeBone: rightLegBone, controller: rightLegIK, baseline: baseline.right },
-        ],
-        IK_BAKE_FRAME_STEP,
-      ),
-    );
+    // Skip baking entirely when legs aren't customized: the authored
+    // rotation is already exactly correct, so there's nothing to correct,
+    // and baking would write unnecessary (and only approximately correct)
+    // keys into the export for no reason -- keeps exported behavior
+    // consistent with the live preview, which skips IK the same way.
+    const restoreBakedAnimations = legsAreCustomized()
+      ? [...legBaselines.entries()].map(([group, baseline]) =>
+          bakeLegIKIntoAnimations(
+            group,
+            skeleton,
+            ikSpace,
+            [
+              { hipBone: leftUpLegBone, kneeBone: leftLegBone, controller: leftLegIK, baseline: baseline.left },
+              { hipBone: rightUpLegBone, kneeBone: rightLegBone, controller: rightLegIK, baseline: baseline.right },
+            ],
+            IK_BAKE_FRAME_STEP,
+          ),
+        )
+      : [];
 
     try {
       const result = await exportCharacter(scene, {
