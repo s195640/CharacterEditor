@@ -139,7 +139,22 @@ export function sampleLegBaseline(
 // stale pre-edit pose. `ikSpace` (not the real character mesh) is passed
 // as the required `mesh` constructor argument -- see the module doc above.
 export function createLegIKChain(ikSpace: TransformNode, kneeBone: Bone): BoneIKController {
-  const controller = new BoneIKController(ikSpace, kneeBone, {});
+  const controller = new BoneIKController(ikSpace, kneeBone, {
+    // The constructor auto-detects "handedness" from
+    // bone.getAbsoluteMatrix().determinant() and picks a default bend axis
+    // accordingly (confirmed: both legs detect determinant > 0, i.e.
+    // "right-handed", giving a default bendAxis of (0,0,-1)) -- but
+    // Babylon scenes are left-handed by default (this project never sets
+    // useRightHandedSystem), so that auto-detected axis is wrong for this
+    // rig and bends the knee backward (hyperextended) instead of forward.
+    // Confirmed empirically by comparing knee bend direction across every
+    // +/-X/Y/Z candidate from a fixed side-on camera angle: only (0,0,1)
+    // (the auto-detected axis with its Z sign flipped) produced a normal,
+    // forward-bending human knee across the gait cycle; every other
+    // candidate, including the auto-detected default, either hyperextended
+    // or collapsed the leg.
+    bendAxis: new Vector3(0, 0, 1),
+  });
   // Override the constructor's default pole target (bone1's parent, i.e.
   // Hips) -- that tracks the LIVE hip bone's orientation, not the authored
   // animation's own knee-bend direction at a given frame, which is what
