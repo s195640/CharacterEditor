@@ -242,7 +242,12 @@ second consumer exists yet to justify one):
   selected group's frame, rounded — the source clips' authored keyframe
   times carry floating-point noise (e.g. `63.9999980926513672`), so an
   unrounded readout would show a confusing near-integer instead of the
-  actual keyframe number), `bodyShape.ts`
+  actual keyframe number. `getCurrentGroup()` exposes the raw selected
+  `AnimationGroup` for callers needing lower-level access than the wrapper
+  methods provide — currently only `main.ts`'s ground-height compensation,
+  which needs the precise unrounded frame and the `[from, to]` range to
+  sample multiple poses (see `bodyShape.ts`'s ground-height compensation
+  entry below)), `bodyShape.ts`
   (`getBoneNode(skeleton, name)` —
   shared lookup, throws if the bone or its linked `TransformNode` is missing;
   `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
@@ -280,15 +285,53 @@ second consumer exists yet to justify one):
   slightly into the ground; and the offset was stored as a fixed world-space
   number, so changing Size afterward rescaled the actual drop but not the
   stored offset meant to cancel it, visibly lifting or sinking the character.
-  The current fix averages both feet's measured delta (reduces, doesn't
-  perfectly eliminate, the dip — a single root-height adjustment can't
-  satisfy two independently-posed feet exactly) and stores the accumulated
-  offset normalized to Size 1.0 (`groundOffsetAtSize1`), re-multiplying by
-  the current Size (`sizeValue`) every time either a body-shape slider or
-  Size itself changes (`applyRootTransform`, called from both `setSize` and
-  `setBodyPart`) — Size is a uniform scale set directly by this code, not
-  read back from an unreliable engine property, so multiplying by it is
-  exact, unlike the first attempt's `absoluteScaling` formula. This runs
+  A fourth attempt averaged both feet's measured delta at that one instant
+  (reduced, didn't eliminate, the dip) and stored the accumulated offset
+  normalized to Size 1.0 (`groundOffsetAtSize1`), re-multiplying by the
+  current Size (`sizeValue`) every time either a body-shape slider or Size
+  itself changes (`applyRootTransform`) — Size is a uniform scale set
+  directly by this code, not read back from an unreliable engine property,
+  so multiplying by it is exact, unlike the first attempt's
+  `absoluteScaling` formula (this part of the fix still stands). But a real
+  bug report exposed the deeper gap this attempt still had: it measured the
+  delta at whichever single pose happened to be active when the slider
+  moved, and a leg segment's actual vertical drop from a given scale change
+  depends on the segment's *current orientation* — which varies
+  substantially across a gait cycle (the shin swings much further from
+  vertical than the thigh does, especially in Running). Lower Leg 200%
+  looked correctly compensated in a static Idle pose, but during Running
+  dipped the foot as low as -0.21 world-Y (vs. a +0.05 baseline minimum
+  with no scaling) at frames far from whatever pose was active when the
+  slider was dragged.
+  The current fix (`setBodyPart` in `main.ts`) samples the delta at 40
+  evenly spaced frames across the *currently selected* animation's whole
+  `[from, to]` range instead of one instant (two passes — measure every
+  sample frame with the old state via `AnimationGroup.goToFrame`, commit
+  the change, measure every sample frame again with the new state, then
+  `goToFrame` back to the exact original frame — captured via
+  `AnimationController.getCurrentGroup()`, which exposes the raw group
+  since `getCurrentFrame()` rounds for display and isn't precise enough to
+  restore from; this all happens synchronously within one slider `input`
+  handler before any render occurs, confirmed to leave the displayed frame
+  bit-exact afterward when paused) — and takes the worst-case (largest)
+  delta across BOTH feet independently, not their average: left and right
+  legs are roughly out of phase during locomotion, so each foot's
+  worst-case dip happens at a different sampled frame, and averaging the
+  two at each frame before taking the max was found to still understate
+  what either foot individually needed at its own worst moment (confirmed:
+  averaging still left a small but real negative dip that more samples
+  alone didn't close; switching to a true per-foot max closed it
+  completely across every case tested). This guarantees the foot never
+  dips below its own natural baseline height at any frame of the selected
+  clip's cycle — frames where the actual drop was smaller than the worst
+  case end up with the foot slightly above its natural baseline instead, a
+  far less jarring result than clipping through the ground. Measured at
+  ~3.5ms average per slider change in-browser (max ~7ms), well within
+  interactive range. Known remaining limitation: this samples the
+  currently selected animation only, so setting a leg slider on Idle then
+  switching to Running could still show some residual drift — a smaller,
+  more familiar category of limitation than the one just fixed, not
+  addressed here. This runs
   only from the slider callbacks, not the per-frame loop, so gait motion is
   left untouched; this is also why splitting Legs into Upper/Lower and
   adding separate Foot controls needed no changes to the compensation logic

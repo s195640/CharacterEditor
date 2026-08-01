@@ -111,4 +111,13 @@ export class AnimationController {
   list(): string[] {
     return this.groups.map((g) => g.name);
   }
+
+  // Exposes the raw group for callers that need lower-level access than the
+  // wrapper methods provide (e.g. main.ts's ground-height compensation
+  // needs the precise, unrounded getCurrentFrame() and the [from, to] range
+  // to sample multiple poses -- getCurrentFrame() above rounds for display,
+  // not precise enough for that).
+  getCurrentGroup(): AnimationGroup | undefined {
+    return this.groups[this.currentIndex];
+  }
 }
