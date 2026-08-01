@@ -265,8 +265,53 @@ second consumer exists yet to justify one):
   exact, unlike the first attempt's `absoluteScaling` formula. This runs
   only from the slider callbacks, not the per-frame loop, so gait motion is
   left untouched; this is also why splitting Legs into Upper/Lower and
-  adding a separate Feet control needed no changes to the compensation logic
-  at all, only to the bone-name list),
+  adding separate Foot controls needed no changes to the compensation logic
+  at all, only to the bone-name list.
+  **Parent/child hierarchy compensation** (separate from the ground-height
+  one above): bones form a hierarchy, so a parent's local `.scaling`
+  unconditionally multiplies through every descendant (Babylon composes a
+  child's world transform as `parent.worldMatrix * child.localMatrix`) —
+  moving e.g. Upper Leg's slider used to visibly resize the whole leg
+  including Lower Leg and Foot, not just the thigh, because `LeftLeg` is a
+  child bone of `LeftUpLeg`. Fixed in `main.ts`'s `BODY_PART_CONFIG` (not
+  `bodyShape.ts` — `scaleBodyPart` itself needed no changes, this is a
+  Shell-level bone-grouping decision): a bone group can name a
+  `parentLabel`, and `applyBodyPart` divides that group's desired
+  length/width by the parent label's *current* `bodyPartState` value before
+  calling `scaleBodyPart`, canceling the inherited scale. This only works
+  cleanly when the parent→child bone's rest-pose rotation is near-identity
+  (confirmed per-pair by parsing `Walking.glb`'s glTF node rotations
+  directly — under ~20°): a large rest-pose rotation means the inherited
+  scale gets reinterpreted through that rotation and would shear/distort
+  instead of cancel, so those pairs are deliberately left uncompensated
+  (documented below). Confirmed empirically that even a *zero-degree*
+  rest-pose pair (e.g. Neck→Head) still shows a few percent residual during
+  live animation, not the near-zero residual a static rest-pose check would
+  suggest (Arm→ForeArm, whose joint barely moves in Walking/Idle/Running,
+  showed ~0.02%; Neck→Head, whose joint actively sways during Idle, showed
+  ~4.9%) — the rest-pose check only guarantees the bones are *structurally*
+  aligned, not that they stay aligned while a specific clip is animating
+  that joint away from rest pose. This is a real, inherent limitation of
+  dividing by a local scale factor (no rotation-aware correction is
+  attempted) — still a large improvement over zero compensation, not a
+  perfect one. For multi-segment "chain" controls (Fingers, Spine, each one
+  slider spanning 3-4 chained bones), the technique is to list *only the
+  chain's root bone* in that group's bone array (e.g. `"Spine":
+  ["mixamorig:Spine"]`, omitting `Spine1`/`Spine2` entirely) and let
+  hierarchy inheritance cascade the same scale down the interior joints
+  (confirmed near-identity) rather than setting the same value on every
+  bone in the chain independently, which would compound.
+  Deliberately-uncompensated pairs, either because the rest-pose rotation
+  is too large or as a design choice: Upper Foot and Middle Foot still
+  cascade from the Leg chain and from each other (`Leg`→`Foot`: 65.5°,
+  `Foot`→`ToeBase`: 26.7° — the ankle/toe bends); Thumb still cascades from
+  Hand's own slider (`Hand`→`Thumb1`: 39.9°, the thumb's opposable rest
+  orientation); Chest still cascades from Spine (`Spine2`→`Shoulder`:
+  127.8°); Hips cascades into everything below it by deliberate design, not
+  because the rotation forced it (`Hips`→`Spine` is only 7.0°, technically
+  compensable) — Hips is treated as an intentional "resize the whole
+  pelvis area" macro control, the same role `Belly`/`Spine1` played before
+  it was retired in favor of the unified `Spine` control),
   `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
@@ -306,14 +351,30 @@ second consumer exists yet to justify one):
   once at load as the "1.0" baseline, then sets `rootNode.scaling =
   baseline.scale(sliderValue)` on input — equipment scales proportionally for
   free (see `loadEquipment`/`loadProp` above). Body Shape: a "Body Shape"
-  section with a Length + Width slider each for Upper Arm, Lower Arm, Upper
-  Leg, Lower Leg, Neck, Feet, Head, and Belly (bone-name groups defined in
-  `main.ts` as `BODY_PART_BONES` — Shell's concern, not Core's, same as
-  equipment bone names like `"mixamorig:RightHand"`), calling `scaleBodyPart`
+  section with a Length + Width slider for each of 18 bone groups (bone
+  names, tab assignment, and optional `parentLabel` for hierarchy
+  compensation all defined in `main.ts` as `BODY_PART_CONFIG` — Shell's
+  concern, not Core's, same as equipment bone names like
+  `"mixamorig:RightHand"` — see `bodyShape.ts` above for the compensation
+  mechanism and which pairs are deliberately left uncompensated), split
+  across 6 tabs (Legs, Foot, Arms, Hand, Fingers, Torso) in `ui.ts` — one
+  tab-button row plus one show/hide container per tab, tab order fixed by
+  `BODY_SHAPE_TAB_ORDER` independent of `BODY_PART_CONFIG`'s own key order
+  (which is instead ordered so a compensated group's `parentLabel` is
+  always defined earlier, so `resetAll`'s single reset pass computes each
+  group's compensation against an already-reset parent). `HeadTop_End`
+  (child of `Head`) was deliberately not added as a control: checking both
+  meshes' `JOINTS_0`/`WEIGHTS_0` vertex attributes found zero vertices
+  bound to it, so a slider there would be a visual no-op. `applyBodyPart`
+  calls `scaleBodyPart`
   every frame via `scene.onBeforeRenderObservable` (see `bodyShape.ts` above
   for why "every frame" instead of once); slider callbacks go through a
-  `setBodyPart` wrapper that also applies the ground-height compensation
-  this list's leg/foot entries need (see `bodyShape.ts` above). A Reset
+  `setBodyPart` wrapper that reapplies every group, not just the changed
+  one, before measuring the ground-height compensation delta (see
+  `bodyShape.ts` above) — needed once hierarchy compensation chains run
+  several levels deep (e.g. Head depends on Neck depends on Spine), since
+  leaving a dependent group stale would measure the ground-height delta
+  against a not-yet-settled pose. A Reset
   button (`main.ts`'s `resetAll`) restores Size, every Body Shape slider,
   equipment, sun, and animation to their load-time defaults in one step —
   it sets the known-default values directly (`groundOffsetAtSize1 = 0`,
