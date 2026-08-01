@@ -83,6 +83,31 @@ export function stopOrphanedAnimatables(scene: Scene): void {
   }
 }
 
+// Mixamo/Blender bakes a constant (1,1,1) "scaling" animation channel onto
+// every bone in every clip, even though nothing ever actually animates
+// scale -- confirmed by inspecting the retargeted clips' data (every
+// keyframe's scale value is the same). This channel is why body-shape
+// scaling has to be reapplied every frame in the live preview (the
+// animation system overwrites .scaling with this baked constant otherwise),
+// and it has a second, more serious consequence: GLTF2Export.GLBAsync
+// serializes scene.animationGroups faithfully, including these channels, so
+// any body-shape customization would be silently discarded the instant a
+// downstream game engine plays one of the exported clips (an animated
+// channel overrides a node's static property value while that animation
+// plays -- standard glTF/engine behavior, not a Babylon quirk). Since the
+// channel is provably constant, removing it changes no visible motion.
+// AnimationGroup.removeTargetedAnimation is safe to call here: this runs
+// once, right after loading, before any group has started playing.
+export function stripScaleAnimations(scene: Scene): void {
+  for (const group of scene.animationGroups) {
+    for (const targetedAnimation of [...group.targetedAnimations]) {
+      if (targetedAnimation.animation.targetProperty === "scaling") {
+        group.removeTargetedAnimation(targetedAnimation.animation);
+      }
+    }
+  }
+}
+
 // Loads a skinned equipment mesh and rebinds it onto an already-loaded
 // skeleton, discarding the duplicate skeleton the glTF brings with it. Only
 // correct if the equipment was authored against the same bone hierarchy/order

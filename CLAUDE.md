@@ -176,6 +176,31 @@ second consumer exists yet to justify one):
   consistently missed roughly a third of them no matter where in the
   loading sequence it ran, so the invariant is continuously re-enforced
   instead of relying on a one-shot cleanup catching a moving target.
+  `stripScaleAnimations(scene)` removes every `AnimationGroup`'s
+  `targetedAnimation` whose `animation.targetProperty === "scaling"` —
+  Mixamo/Blender bakes a constant (1,1,1) scale channel onto every bone in
+  every clip even though nothing ever animates scale, which is *why*
+  body-shape scaling previously needed reapplying every frame (the
+  animation system kept overwriting `.scaling` with this baked constant).
+  This has a second, more serious consequence beyond the live preview:
+  `GLTF2Export.GLBAsync` (see `exporter.ts` below) serializes
+  `scene.animationGroups` faithfully, so without stripping these channels
+  first, any body-shape customization would be silently discarded the
+  instant a downstream game engine plays one of the exported clips — an
+  animated channel overrides a node's static property value while that
+  animation plays, standard glTF/engine behavior, confirmed by exporting a
+  customized character and parsing the resulting GLB's JSON chunk
+  directly: zero scale channels, and the customized node's static `scale`
+  correctly reflects the customization. Called once, right after all
+  clips are loaded, before any group has started playing (removing a
+  targeted animation from a group that's already playing would be
+  unverified territory — this project always does it before `.play()` is
+  ever called). Since the channel is provably constant, removing it
+  changes no visible motion, and once it's gone, `applyBodyPart` only
+  needs to run when a slider actually changes (`setBodyPart` in
+  `main.ts`), not every frame — confirmed by watching a bone's `.scaling`
+  hold steady across 1.5s of active Running playback with no per-frame
+  reapplication at all.
   `loadEquipment` loads a skinned equipment mesh, rebinds it onto an
   already-loaded skeleton (discarding the duplicate skeleton the glTF brings
   with it — only correct if authored against the same bone hierarchy/order,
@@ -223,11 +248,12 @@ second consumer exists yet to justify one):
   `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
   scaling each named bone's node — Y is the bone-length axis and X/Z are
   width, confirmed rig-wide by inspecting bone-to-child local translations,
-  not assumed. Must be reapplied every frame via
-  `scene.onBeforeRenderObservable`, not just once on slider input: the
-  retargeted animations' baked glTF data includes a constant scale=1 track on
-  every bone, which silently overwrites any one-time manual scaling within a
-  frame or two. Any bone between the hips and the toe (Upper Leg, Lower Leg,
+  not assumed. Only needs applying once per slider change (`setBodyPart` in
+  `main.ts`), not every frame — the retargeted animations' baked constant
+  scale=1 track that used to silently overwrite manual scaling within a
+  frame or two is now stripped at load time (see `characterLoader.ts`'s
+  `stripScaleAnimations` above), so nothing fights the assignment anymore.
+  Any bone between the hips and the toe (Upper Leg, Lower Leg,
   Feet) also needs a **ground-height compensation**, applied in `main.ts`:
   lengthening one pushes the foot further from the hip — i.e. down, through
   the ground — since legs hang downward, not the character growing taller
@@ -366,9 +392,9 @@ second consumer exists yet to justify one):
   (child of `Head`) was deliberately not added as a control: checking both
   meshes' `JOINTS_0`/`WEIGHTS_0` vertex attributes found zero vertices
   bound to it, so a slider there would be a visual no-op. `applyBodyPart`
-  calls `scaleBodyPart`
-  every frame via `scene.onBeforeRenderObservable` (see `bodyShape.ts` above
-  for why "every frame" instead of once); slider callbacks go through a
+  calls `scaleBodyPart` only when a slider actually changes (see
+  `bodyShape.ts` above for why it no longer needs to run every frame);
+  slider callbacks go through a
   `setBodyPart` wrapper that reapplies every group, not just the changed
   one, before measuring the ground-height compensation delta (see
   `bodyShape.ts` above) — needed once hierarchy compensation chains run

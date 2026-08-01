@@ -17,6 +17,7 @@ import {
   loadEquipment,
   loadProp,
   stopOrphanedAnimatables,
+  stripScaleAnimations,
 } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
 import { getBoneNode, scaleBodyPart } from "../core/bodyShape";
@@ -182,6 +183,7 @@ async function main() {
   for (const file of ADDITIONAL_ANIMATION_FILES) {
     await loadAnimationClip(scene, "/characters/", file);
   }
+  stripScaleAnimations(scene);
 
   const animationController = new AnimationController(scene.animationGroups);
   animationController.play();
@@ -347,21 +349,20 @@ async function main() {
     applyRootTransform();
   };
 
-  // The retargeted animations' baked glTF data apparently includes a
-  // constant scale=1 track on every bone (Mixamo/Blender bake full TRS
-  // keyframes even for channels that never change), which silently
-  // overwrites any manual bone scaling within a frame or two. Reapplying
-  // every frame, after the animation system has run, makes our override win
-  // instead of fighting it once at slider-input time.
+  // Body-shape scaling no longer needs reapplying every frame: the
+  // retargeted animations' baked constant scale=1 track (Mixamo/Blender
+  // bake full TRS keyframes even for channels that never change) used to
+  // silently overwrite any manual bone scaling within a frame or two, but
+  // stripScaleAnimations removes that dead-weight channel entirely at load
+  // time (see characterLoader.ts), so applyBodyPart only needs to run when
+  // a slider actually changes (setBodyPart), not every frame.
   //
-  // Also re-enforces stopOrphanedAnimatables every frame rather than
+  // stopOrphanedAnimatables still re-enforces every frame rather than
   // sweeping once after loading -- see its doc comment in characterLoader.ts
   // for why a one-shot sweep, even deferred to the next render frame,
-  // wasn't reliable here.
+  // wasn't reliable there (an unrelated Babylon quirk, not the same issue
+  // this comment used to describe).
   scene.onBeforeRenderObservable.add(() => {
-    for (const label of Object.keys(BODY_PART_CONFIG)) {
-      applyBodyPart(label);
-    }
     stopOrphanedAnimatables(scene);
     panel.setFrameNumber(animationController.getCurrentFrame());
   });
