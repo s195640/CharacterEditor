@@ -8,6 +8,7 @@ import {
   Scene,
   ShadowGenerator,
   StandardMaterial,
+  TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import type { AbstractMesh } from "@babylonjs/core";
@@ -23,6 +24,15 @@ import {
 import { AnimationController } from "../core/animationController";
 import { captureRestTranslations, getBoneNode, scaleBodyPart, translateBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
+import {
+  captureLegBaseline,
+  createLegIKChain,
+  type LegBaselineSample,
+  sampleLegBaseline,
+  syncBonesFromLinkedTransformNodes,
+  updateLegIK,
+} from "../core/legIK";
+import type { AnimationGroup, BoneIKController } from "@babylonjs/core";
 import { createControlPanel } from "./ui";
 
 function downloadJson(filename: string, data: unknown): void {
@@ -256,12 +266,93 @@ async function main() {
   const restTranslations = captureRestTranslations(character.skeletons[0], lengthBones);
 
   const animationController = new AnimationController(scene.animationGroups);
-  animationController.play();
 
   const characterMesh = character.meshes.find((mesh) => mesh.skeleton === character.skeletons[0]);
   if (!characterMesh) {
     throw new Error("Character mesh with a skeleton not found");
   }
+
+  // Real IK foot-locking (see docs/other/PLAN_translation_based_body_shape.MD,
+  // Phase 4), replacing the old root-offset ground-height hack, which only
+  // ever sampled against whichever clip happened to be selected when a
+  // slider moved. Baseline capture happens once per clip, right here
+  // before playback starts and before any body-shape edit is ever applied,
+  // recording "where the authored animation puts the ankle/knee" at the
+  // character's default proportions -- the fixed target every subsequent
+  // leg-length customization gets IK-solved against, independent of which
+  // clip is later selected for playback.
+  //
+  // ikSpace is an inert, never-parented, identity-transform reference node
+  // -- required as BoneIKController's non-nullable "mesh" constructor
+  // argument, but deliberately NOT the real character mesh. This rig's
+  // scene-graph root ("__root__", above "Armature") carries a mirrored
+  // ([1,1,-1]) scale (a Blender FBX-to-glTF conversion artifact), and
+  // bridging bone-space through that real, mirrored mesh corrupts
+  // BoneIKController's world-space rotation math: confirmed empirically
+  // that a single controller.update() call left a bone's .scaling at
+  // ~100 (the exact inverse of the rig's ~0.01 import scale) instead of
+  // its correct 1, producing a fully collapsed leg. Bridging through this
+  // identity node instead keeps every position in one consistent
+  // (unscaled, un-mirrored) skeleton-space, confirmed to leave bone
+  // scaling untouched and a no-op target exactly in place.
+  const ikSpace = new TransformNode("ikSpace", scene);
+  const IK_BASELINE_SAMPLE_COUNT = 120;
+  const skeleton = character.skeletons[0];
+  const leftUpLegBone = skeleton.bones.find((b) => b.name === "mixamorig:LeftUpLeg");
+  const rightUpLegBone = skeleton.bones.find((b) => b.name === "mixamorig:RightUpLeg");
+  const leftLegBone = skeleton.bones.find((b) => b.name === "mixamorig:LeftLeg");
+  const rightLegBone = skeleton.bones.find((b) => b.name === "mixamorig:RightLeg");
+  const leftFootBone = skeleton.bones.find((b) => b.name === "mixamorig:LeftFoot");
+  const rightFootBone = skeleton.bones.find((b) => b.name === "mixamorig:RightFoot");
+  if (
+    !leftUpLegBone ||
+    !rightUpLegBone ||
+    !leftLegBone ||
+    !rightLegBone ||
+    !leftFootBone ||
+    !rightFootBone
+  ) {
+    throw new Error("Leg bones not found for IK setup");
+  }
+  const legBaselines = new Map<
+    AnimationGroup,
+    { left: LegBaselineSample[]; right: LegBaselineSample[] }
+  >();
+  for (const group of scene.animationGroups) {
+    legBaselines.set(group, {
+      left: captureLegBaseline(
+        group,
+        skeleton,
+        ikSpace,
+        leftUpLegBone,
+        leftLegBone,
+        leftFootBone,
+        IK_BASELINE_SAMPLE_COUNT,
+      ),
+      right: captureLegBaseline(
+        group,
+        skeleton,
+        ikSpace,
+        rightUpLegBone,
+        rightLegBone,
+        rightFootBone,
+        IK_BASELINE_SAMPLE_COUNT,
+      ),
+    });
+  }
+
+  // BoneIKController measures bone lengths once at construction, so it's
+  // rebuilt (not mutated) whenever Upper Leg or Lower Leg's translation-
+  // based length changes -- see setBodyPart/resetAll below.
+  let leftLegIK: BoneIKController = createLegIKChain(ikSpace, leftLegBone);
+  let rightLegIK: BoneIKController = createLegIKChain(ikSpace, rightLegBone);
+  const rebuildLegIKChains = () => {
+    syncBonesFromLinkedTransformNodes(skeleton);
+    leftLegIK = createLegIKChain(ikSpace, leftLegBone);
+    rightLegIK = createLegIKChain(ikSpace, rightLegBone);
+  };
+
+  animationController.play();
 
   const equipmentMeshes = await loadEquipment(
     scene,
@@ -335,159 +426,33 @@ async function main() {
     scaleBodyPart(character.skeletons[0], config.bones!, length, 1);
   };
 
-  // Any bone between the hips and the toe (Upper Leg, Lower Leg, Feet) hangs
-  // downward, so lengthening it pushes the foot further away -- i.e. further
-  // down, through the ground -- instead of making the character taller with
-  // feet still planted. Compensate by raising the whole character so the
-  // foot returns to its original ground-contact height, regardless of which
-  // of those bones actually caused the drop.
-  //
-  // This is measured directly, not derived from a formula: a first attempt
-  // (for Legs alone, before Feet existed as a separate control) computed the
-  // expected added length from rest-pose bone offsets times the hips'
-  // absoluteScaling, which turned out unreliable for a bone-linked
-  // TransformNode (it read back a bare 1 instead of the real parent-chain
-  // scale at rest, and didn't scale proportionally once actually stretched --
-  // confirmed by comparing the predicted vs. actual foot-drop across several
-  // slider values, which diverged non-linearly instead of matching).
-  //
-  // A second attempt measured the foot's world position every frame and
-  // forced it to a fixed height continuously -- which "worked" in Idle, but
-  // during Running drove the right foot as low as -0.62 world-Y with zero
-  // body-shape sliders touched at all (confirmed by sampling both toes over
-  // a full running cycle). A walk/run gait lifts each foot off the ground
-  // for part of its cycle by design; locking the left foot flat on every
-  // frame fights that natural motion and forces the whole character to bob
-  // to compensate, which then throws the right foot's independent swing out
-  // of sync since only the left foot was ever measured.
-  //
-  // A third attempt measured only the left foot's before/after delta on
-  // slider change and added it once into the root offset. This avoids
-  // fighting gait, but still has two gaps: (1) during a mid-stride pose the
-  // legs aren't vertical, so the same scale change produces a slightly
-  // different vertical drop for the left and right foot -- canceling one
-  // exactly leaves the other a little off, seen as the toes dipping slightly
-  // into the ground; and (2) the compensation was stored as a fixed
-  // world-space offset, so changing Size afterward rescaled the actual drop
-  // but not the stored offset meant to cancel it, visibly lifting or sinking
-  // the character. Averaging both feet's measured delta reduces (1). Storing
-  // the offset normalized to Size 1.0 and re-multiplying by the current Size
-  // whenever either Size or a body-shape slider changes fixes (2) -- Size is
-  // a uniform scale we set ourselves (not read back from an unreliable
-  // engine property), so multiplying by it is exact, unlike the earlier
-  // formula attempt that relied on reading back scaling from Babylon.
-  const leftToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:LeftToeBase");
-  const rightToeBaseNode = getBoneNode(character.skeletons[0], "mixamorig:RightToeBase");
-  const baseRootY = character.rootNode.position.y;
+  // Overall Size still just scales the whole character; the old vertical
+  // ground-offset half of this (superseded by real per-frame IK foot-
+  // locking, see the leg IK setup above and onBeforeRenderObservable below)
+  // is gone -- rootNode.position.y stays at its original loaded value
+  // permanently, untouched by any body-shape or Size change.
   const baseScale = character.rootNode.scaling.clone();
   let sizeValue = 1;
-  let groundOffsetAtSize1 = 0;
   const applyRootTransform = () => {
     character.rootNode.scaling = baseScale.scale(sizeValue);
-    character.rootNode.position.y = baseRootY + groundOffsetAtSize1 * sizeValue;
-  };
-  // getAbsolutePosition() reads a cached world matrix that's only refreshed
-  // during a render pass -- reading it twice synchronously (before/after,
-  // with no render in between) would return the same stale value both
-  // times, always measuring a delta of zero. Force a recompute on each read.
-  const measureFootY = (node: typeof leftToeBaseNode) => {
-    node.computeWorldMatrix(true);
-    return node.getAbsolutePosition().y;
   };
   const setSize = (value: number) => {
     sizeValue = value;
     applyRootTransform();
   };
-  // A fourth gap in the third attempt above: it measured the delta at
-  // whatever single pose happened to be active when the slider moved. A
-  // leg segment's actual vertical drop from a given scale change depends
-  // on the segment's CURRENT orientation, which varies substantially
-  // across a gait cycle -- the shin swings much further from vertical than
-  // the thigh does, especially in Running. Confirmed the hard way: Lower
-  // Leg 200% looked correctly compensated in a static Idle pose, but during
-  // Running dipped the foot as low as -0.21 world-Y (vs. a +0.05 baseline
-  // minimum with no scaling) at frames far from whatever pose was active
-  // when the slider was dragged.
-  //
-  // Fixed by sampling the delta at several evenly spaced frames across the
-  // CURRENTLY SELECTED animation's whole [from, to] range instead of one
-  // instant, and using the worst-case (largest) delta -- this guarantees
-  // the foot never dips below its own natural baseline height at any frame
-  // of that cycle. At frames where the actual scale-induced drop was
-  // smaller than the worst case, the foot sits slightly above its natural
-  // baseline instead -- a far less jarring result than clipping through
-  // the ground. Two passes (measure every sample frame with the OLD state,
-  // commit the change, measure every sample frame again with the NEW
-  // state) avoid toggling bodyPartState back and forth per sample.
-  // AnimationController.getCurrentGroup() exposes the raw group (not the
-  // display-rounded getCurrentFrame()) so the exact original frame can be
-  // restored afterward -- this all happens synchronously within one
-  // slider input handler, before any render occurs, so the sampling pass
-  // itself is never visible either way, but restoring exactly is still
-  // correct practice and cheap. 40 samples comfortably exceeds Walking's
-  // and Running's own keyframe density (33 and 21 respectively, across
-  // their full range) without needing to land on every keyframe exactly to
-  // catch the worst case; measured at ~3.5ms average per slider change
-  // in-browser (max ~7ms), well within interactive range. Applied
-  // uniformly to every
-  // setBodyPart call, not just leg/foot labels, consistent with the
-  // existing "reapply every label" decision above -- simpler than tracking
-  // exactly which labels affect foot height, and the operations involved
-  // (matrix math, no rendering) are cheap enough that the redundant
-  // sampling for unrelated labels isn't noticeable.
-  const GROUND_SAMPLE_COUNT = 40;
   const setBodyPart = (label: string, length: number) => {
-    const group = animationController.getCurrentGroup();
-    const originalFrame = group?.getCurrentFrame();
-    const sampleFrames = group
-      ? Array.from(
-          { length: GROUND_SAMPLE_COUNT },
-          (_, i) => group.from + ((group.to - group.from) * i) / (GROUND_SAMPLE_COUNT - 1),
-        )
-      : [0];
-
-    const beforeLeft: number[] = [];
-    const beforeRight: number[] = [];
-    for (const frame of sampleFrames) {
-      group?.goToFrame(frame);
-      beforeLeft.push(measureFootY(leftToeBaseNode));
-      beforeRight.push(measureFootY(rightToeBaseNode));
-    }
-
     bodyPartState[label] = length;
     // Reapply every label, not just this one: some interim Scale-based
     // labels still cascade into their own descendants via hierarchy
-    // inheritance, so leaving them stale here would measure the
-    // ground-height delta against a transient, not-yet-settled pose.
+    // inheritance.
     for (const otherLabel of Object.keys(BODY_PART_CONFIG)) {
       applyBodyPart(otherLabel);
     }
-
-    // Max across BOTH feet independently, not their average: left and
-    // right legs are roughly out of phase during locomotion, so each
-    // foot's worst-case dip happens at a different sampled frame.
-    // Averaging the two at each frame before taking the max understated
-    // what either foot individually needed at its own worst moment,
-    // confirmed the hard way (averaging still left a small but real
-    // negative dip that more samples alone didn't close). Taking the
-    // true max means whichever foot needs the most compensation at its
-    // single worst instant dictates the offset -- the other foot ends up
-    // slightly above its own baseline at that frame instead, which is
-    // the correct trade-off for "never clip through the ground".
-    let worstDelta = -Infinity;
-    for (let i = 0; i < sampleFrames.length; i++) {
-      group?.goToFrame(sampleFrames[i]);
-      const afterLeft = measureFootY(leftToeBaseNode);
-      const afterRight = measureFootY(rightToeBaseNode);
-      worstDelta = Math.max(worstDelta, beforeLeft[i] - afterLeft, beforeRight[i] - afterRight);
-    }
-
-    groundOffsetAtSize1 += worstDelta / sizeValue;
-    applyRootTransform();
-
-    if (group && originalFrame !== undefined) {
-      group.goToFrame(originalFrame);
-    }
+    // Rebuilding unconditionally (not just for Upper/Lower Leg) mirrors the
+    // existing "reapply every label" choice above -- simpler than tracking
+    // exactly which labels affect leg length, and cheap (bone position
+    // reads, no rendering).
+    rebuildLegIKChains();
   };
 
   // Body-shape scaling no longer needs reapplying every frame: the
@@ -506,17 +471,23 @@ async function main() {
   scene.onBeforeRenderObservable.add(() => {
     stopOrphanedAnimatables(scene);
     panel.setFrameNumber(animationController.getCurrentFrame());
+
+    // Real per-frame IK foot-locking. Must sync bone state FROM the
+    // linked TransformNodes ourselves first: Skeleton.prepare() (which
+    // normally does this) doesn't run until later in the frame, during
+    // mesh rendering -- after this observable -- so without this, the IK
+    // solve below would read last frame's stale hip/knee positions rather
+    // than this frame's already-evaluated animation (see legIK.ts).
+    syncBonesFromLinkedTransformNodes(skeleton);
+    const group = animationController.getCurrentGroup();
+    const baseline = group ? legBaselines.get(group) : undefined;
+    if (group && baseline) {
+      const frame = group.getCurrentFrame();
+      updateLegIK(leftLegIK, ikSpace, leftUpLegBone, sampleLegBaseline(baseline.left, frame));
+      updateLegIK(rightLegIK, ikSpace, rightUpLegBone, sampleLegBaseline(baseline.right, frame));
+    }
   });
 
-  // Doesn't reuse setBodyPart's before/after measurement: that dance exists
-  // to cancel drift caused BY a scale change, measured relative to whatever
-  // pose the character happens to be in at that moment -- accurate for one
-  // incremental adjustment, but not exact when undoing several at once from
-  // a different animation pose than they were originally set from (a leg
-  // scaled up while roughly vertical in Idle doesn't cancel by the same
-  // vertical amount if unscaled while swung out mid-stride in Running).
-  // Reset already knows the true defaults outright, so it sets them directly
-  // instead of re-deriving them through measurement.
   const syncPauseUI = () => panel.setPauseState(animationController.isPaused());
 
   const resetAll = () => {
@@ -524,7 +495,7 @@ async function main() {
       bodyPartState[label] = 1;
       applyBodyPart(label);
     }
-    groundOffsetAtSize1 = 0;
+    rebuildLegIKChains();
     setSize(1);
     equippables.forEach((item) => setEquippableState(item, false));
     setSunEnabled(true);
