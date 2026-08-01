@@ -304,40 +304,76 @@ second consumer exists yet to justify one):
   Shell-level bone-grouping decision): a bone group can name a
   `parentLabel`, and `applyBodyPart` divides that group's desired
   length/width by the parent label's *current* `bodyPartState` value before
-  calling `scaleBodyPart`, canceling the inherited scale. This only works
-  cleanly when the parent→child bone's rest-pose rotation is near-identity
-  (confirmed per-pair by parsing `Walking.glb`'s glTF node rotations
-  directly — under ~20°): a large rest-pose rotation means the inherited
-  scale gets reinterpreted through that rotation and would shear/distort
-  instead of cancel, so those pairs are deliberately left uncompensated
-  (documented below). Confirmed empirically that even a *zero-degree*
-  rest-pose pair (e.g. Neck→Head) still shows a few percent residual during
-  live animation, not the near-zero residual a static rest-pose check would
-  suggest (Arm→ForeArm, whose joint barely moves in Walking/Idle/Running,
-  showed ~0.02%; Neck→Head, whose joint actively sways during Idle, showed
-  ~4.9%) — the rest-pose check only guarantees the bones are *structurally*
-  aligned, not that they stay aligned while a specific clip is animating
-  that joint away from rest pose. This is a real, inherent limitation of
-  dividing by a local scale factor (no rotation-aware correction is
-  attempted) — still a large improvement over zero compensation, not a
-  perfect one. For multi-segment "chain" controls (Fingers, Spine, each one
+  calling `scaleBodyPart`, canceling the inherited scale. Whether a pair
+  gets compensated at all was decided by parsing `Walking.glb`'s glTF node
+  rotations directly for the parent→child bone's *rest-pose* rotation
+  (compensating under ~20°, leaving larger ones as an accepted cascade —
+  documented below) — but a real bug report (Size max, Upper Leg 200%,
+  Running frame 22: foot far below the ground plane, Upper Leg still
+  visibly resizing Lower Leg despite the division) showed this rest-pose
+  check alone doesn't make simple division reliable: it only guarantees
+  the bones are *structurally* aligned at bind pose, not that they stay
+  aligned while a specific clip is actively animating that joint away from
+  rest pose — a near-identity rest-pose pair (Neck→Head, 0.0°) still
+  showed a ~4.9% residual during Idle's subtle sway, and the knee's dynamic
+  range during Running is a much larger version of the same effect,
+  amplified by extreme slider values into large absolute world units.
+  Confirmed via Babylon's own source (`Bones/skeleton.js`'s `prepare()`,
+  `Bones/bone.pure.js`'s `_compose()`) that a mathematically exact,
+  rotation-aware fix isn't achievable at all for `linkTransformNode`-based
+  bones: skinning reads only `bone.position`/`bone.rotationQuaternion`/
+  `bone.scaling` (plain properties recomposed via clean TRS, no shear
+  representable at any point in that pipeline), regardless of whether the
+  correction is computed live or pre-baked into keyframe data — both are
+  in the same representable space. The actual fix that *is* exact and
+  achievable: a parent's scale contribution reaches a rotated child as
+  `R⁻¹·S_parent·R`, which equals `S_parent` unchanged for *any* rotation R
+  if and only if `S_parent` is uniform (`k·I` — a scalar multiple of
+  identity commutes with every rotation). So any `BODY_PART_CONFIG` group
+  that is itself a *parent* in a compensated pair also sets
+  `uniformOnly: true`, rendering one "Size" slider instead of separate
+  Length/Width (`ui.ts` reads the flag) — this makes that pair's
+  compensation exactly shear-free at any joint angle, confirmed via a real
+  Running-frame reproduction (0.00% residual across 10 dynamic frames, vs.
+  the old division-only approach's several-percent-and-up residual) and
+  via the original bug report's exact repro (foot Y went from far below
+  the ground plane to within centimeters of the pre-existing baseline).
+  This must propagate down any chain of compensated pairs: a bone that is
+  itself a *child* in one pair and a *parent* in another (Lower Arm
+  compensates against Upper Arm, and Hand in turn compensates against
+  Lower Arm) must ALSO be `uniformOnly` for the pair *below* it to be
+  exact, even though its own compensation against its own parent doesn't
+  need it. Currently `uniformOnly`: `Upper Leg`, `Middle Foot`, `Chest`,
+  `Upper Arm`, `Lower Arm`, `Hand`, `Spine`, `Neck` — every current
+  `parentLabel` target. Everything else keeps full independent
+  Length/Width (nothing compensates against them, so no shear risk):
+  `Lower Leg`, `Lower Foot`, `Upper Foot`, `Thumb`, `Index`/`Middle`/
+  `Ring`/`Pinky`, `Head`, `Hips`.
+  For multi-segment "chain" controls (Fingers, Spine, each one
   slider spanning 3-4 chained bones), the technique is to list *only the
   chain's root bone* in that group's bone array (e.g. `"Spine":
   ["mixamorig:Spine"]`, omitting `Spine1`/`Spine2` entirely) and let
   hierarchy inheritance cascade the same scale down the interior joints
   (confirmed near-identity) rather than setting the same value on every
   bone in the chain independently, which would compound.
-  Deliberately-uncompensated pairs, either because the rest-pose rotation
-  is too large or as a design choice: Upper Foot and Middle Foot still
-  cascade from the Leg chain and from each other (`Leg`→`Foot`: 65.5°,
-  `Foot`→`ToeBase`: 26.7° — the ankle/toe bends); Thumb still cascades from
-  Hand's own slider (`Hand`→`Thumb1`: 39.9°, the thumb's opposable rest
-  orientation); Chest still cascades from Spine (`Spine2`→`Shoulder`:
-  127.8°); Hips cascades into everything below it by deliberate design, not
-  because the rotation forced it (`Hips`→`Spine` is only 7.0°, technically
-  compensable) — Hips is treated as an intentional "resize the whole
-  pelvis area" macro control, the same role `Belly`/`Spine1` played before
-  it was retired in favor of the unified `Spine` control),
+  Deliberately-uncompensated pairs remain, either because the rest-pose
+  rotation is too large for even a uniform-parent fix to help (shear from
+  rotation alone, independent of the parent's own uniformity, still isn't
+  addressed by this technique — a uniform parent scale commutes with
+  rotation, but these pairs were never given a `parentLabel` at all) or as
+  a design choice: Upper Foot and Middle Foot still cascade from the Leg
+  chain and from each other (`Leg`→`Foot`: 65.5°, `Foot`→`ToeBase`: 26.7°
+  — the ankle/toe bends; this is why the original bug's foot-position
+  symptom improved dramatically but not to an exact zero — the still-
+  uncompensated Leg→Foot link remains); Thumb still cascades from Hand's
+  own slider (`Hand`→`Thumb1`: 39.9°, the thumb's opposable rest
+  orientation); Hips cascades into everything below it by deliberate
+  design, not because the rotation forced it (`Hips`→`Spine` is only 7.0°,
+  technically compensable) — Hips is treated as an intentional "resize the
+  whole pelvis area" macro control, the same role `Belly`/`Spine1` played
+  before it was retired in favor of the unified `Spine` control (Spine
+  itself is `uniformOnly` since Neck compensates against it, but nothing
+  compensates against Hips, so Hips stays fully independent),
   `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
@@ -377,13 +413,18 @@ second consumer exists yet to justify one):
   once at load as the "1.0" baseline, then sets `rootNode.scaling =
   baseline.scale(sliderValue)` on input — equipment scales proportionally for
   free (see `loadEquipment`/`loadProp` above). Body Shape: a "Body Shape"
-  section with a Length + Width slider for each of 18 bone groups (bone
-  names, tab assignment, and optional `parentLabel` for hierarchy
-  compensation all defined in `main.ts` as `BODY_PART_CONFIG` — Shell's
-  concern, not Core's, same as equipment bone names like
+  section with a slider row for each of 18 bone groups (bone names, tab
+  assignment, optional `parentLabel` for hierarchy compensation, and
+  optional `uniformOnly` all defined in `main.ts` as `BODY_PART_CONFIG` —
+  Shell's concern, not Core's, same as equipment bone names like
   `"mixamorig:RightHand"` — see `bodyShape.ts` above for the compensation
-  mechanism and which pairs are deliberately left uncompensated), split
-  across 6 tabs (Legs, Foot, Arms, Hand, Fingers, Torso) in `ui.ts` — one
+  mechanism, which pairs are `uniformOnly`, and which are deliberately left
+  uncompensated) — a single "Size" slider for `uniformOnly` groups,
+  separate Length + Width for everything else (`ui.ts`'s `BodyPartOptions.
+  uniformOnly` flag, read in `createControlPanel`'s per-part render loop;
+  same `createLabeledSlider` helper either way, just one call instead of
+  two), split across 6 tabs (Legs, Foot, Arms, Hand, Fingers, Torso) in
+  `ui.ts` — one
   tab-button row plus one show/hide container per tab, tab order fixed by
   `BODY_SHAPE_TAB_ORDER` independent of `BODY_PART_CONFIG`'s own key order
   (which is instead ordered so a compensated group's `parentLabel` is

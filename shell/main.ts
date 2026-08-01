@@ -52,20 +52,41 @@ interface BodyPartConfig {
   tab: string;
   // Bones form a hierarchy, so a parent's local scale unconditionally
   // multiplies through every descendant (Babylon composes a child's world
-  // transform as parent.worldMatrix * child.localMatrix). When the
-  // rest-pose rotation between a parent and child bone is near-identity
-  // (confirmed per-pair by inspecting Walking.glb's glTF node rotations —
-  // under ~20 degrees), dividing this label's desired length/width by the
-  // parent label's CURRENT bodyPartState value exactly cancels that
-  // inherited scale, so this control only affects its own segment. Left
-  // undefined where the rest-pose rotation is too large for a simple
-  // diagonal-scale division to cancel cleanly without shearing (e.g. the
-  // ~65 degree ankle bend between Lower Leg and Upper Foot, or thumb's
-  // ~40 degree opposable rest orientation) -- those segments are left to
-  // cascade from their parent, same as Hips is deliberately left to
-  // cascade into everything below it as a "resize the whole area" macro
-  // control, matching this project's earlier Belly/Spine1 precedent.
+  // transform as parent.worldMatrix * child.localMatrix). Dividing this
+  // label's desired length/width by the parent label's CURRENT
+  // bodyPartState value cancels that inherited scale -- but only exactly
+  // if the parent's own scale is uniform. A non-uniform parent scale
+  // (length != width) reaches a rotated child as R⁻¹·S_parent·R, which is
+  // only equal to S_parent (i.e. cancels cleanly via simple division) when
+  // R is identity; for any real rotation it shears instead. This was first
+  // caught via rest-pose rotation alone (pairs under ~20 degrees looked
+  // safe, e.g. the knee's 2.18 degrees), but rest pose only describes the
+  // BIND pose -- it says nothing about how far a joint actually rotates
+  // during a specific animation. Running's mid-stride knee bend is far
+  // from rest pose, and confirmed to produce real, visible shear despite
+  // the "safe" rest-pose classification, worse the more extreme the
+  // slider values (Size max + Upper Leg 200% turned a modest percentage
+  // residual into the foot rendering far below the ground plane at
+  // certain frames). Left undefined where the rest-pose rotation alone
+  // was already too large for even a best-case simple division to work
+  // (e.g. the ~65 degree ankle bend between Lower Leg and Upper Foot, or
+  // the thumb's ~40 degree opposable rest orientation) -- those segments
+  // are left to cascade from their parent, same as Hips is deliberately
+  // left to cascade into everything below it as a "resize the whole area"
+  // macro control, matching this project's earlier Belly/Spine1 precedent.
   parentLabel?: string;
+  // A uniform scale (length === width) commutes with ANY rotation --
+  // R⁻¹·(k·I)·R = k·I regardless of R -- so forcing a compensated pair's
+  // PARENT to be uniform-only makes that pair's compensation exactly
+  // shear-free at any joint angle, with no dependency on staying near rest
+  // pose. This must propagate down any chain of compensated pairs: a bone
+  // that is itself a child in one pair and a parent in another (e.g. Lower
+  // Arm compensates against Upper Arm, and Hand compensates against Lower
+  // Arm) must ALSO be uniform-only for the pair below it to be exact, even
+  // though its own compensation against its own parent doesn't need it.
+  // Rendered as a single "Size" slider instead of separate Length/Width
+  // (see ui.ts).
+  uniformOnly?: boolean;
 }
 
 // Order matters here: a label referencing `parentLabel` must be defined
@@ -74,12 +95,16 @@ interface BodyPartConfig {
 // stale one.
 const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
   Hips: { bones: ["mixamorig:Hips"], tab: "Torso" },
-  Spine: { bones: ["mixamorig:Spine"], tab: "Torso" },
-  Chest: { bones: ["mixamorig:LeftShoulder", "mixamorig:RightShoulder"], tab: "Torso" },
-  Neck: { bones: ["mixamorig:Neck"], tab: "Torso", parentLabel: "Spine" },
+  Spine: { bones: ["mixamorig:Spine"], tab: "Torso", uniformOnly: true },
+  Chest: { bones: ["mixamorig:LeftShoulder", "mixamorig:RightShoulder"], tab: "Torso", uniformOnly: true },
+  Neck: { bones: ["mixamorig:Neck"], tab: "Torso", parentLabel: "Spine", uniformOnly: true },
   Head: { bones: ["mixamorig:Head"], tab: "Torso", parentLabel: "Neck" },
 
-  "Upper Leg": { bones: ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg"], tab: "Legs" },
+  "Upper Leg": {
+    bones: ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg"],
+    tab: "Legs",
+    uniformOnly: true,
+  },
   "Lower Leg": {
     bones: ["mixamorig:LeftLeg", "mixamorig:RightLeg"],
     tab: "Legs",
@@ -87,7 +112,11 @@ const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
   },
 
   "Upper Foot": { bones: ["mixamorig:LeftFoot", "mixamorig:RightFoot"], tab: "Foot" },
-  "Middle Foot": { bones: ["mixamorig:LeftToeBase", "mixamorig:RightToeBase"], tab: "Foot" },
+  "Middle Foot": {
+    bones: ["mixamorig:LeftToeBase", "mixamorig:RightToeBase"],
+    tab: "Foot",
+    uniformOnly: true,
+  },
   "Lower Foot": {
     bones: ["mixamorig:LeftToe_End", "mixamorig:RightToe_End"],
     tab: "Foot",
@@ -98,14 +127,21 @@ const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
     bones: ["mixamorig:LeftArm", "mixamorig:RightArm"],
     tab: "Arms",
     parentLabel: "Chest",
+    uniformOnly: true,
   },
   "Lower Arm": {
     bones: ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"],
     tab: "Arms",
     parentLabel: "Upper Arm",
+    uniformOnly: true,
   },
 
-  Hand: { bones: ["mixamorig:LeftHand", "mixamorig:RightHand"], tab: "Hand", parentLabel: "Lower Arm" },
+  Hand: {
+    bones: ["mixamorig:LeftHand", "mixamorig:RightHand"],
+    tab: "Hand",
+    parentLabel: "Lower Arm",
+    uniformOnly: true,
+  },
 
   // Chain-root technique: each finger's 4 segments (…1/2/3/4) are chained
   // bones with near-identity rest-pose rotation between them, so only the
@@ -432,8 +468,10 @@ async function main() {
     bodyParts: Object.keys(BODY_PART_CONFIG).map((label) => ({
       label,
       tab: BODY_PART_CONFIG[label].tab,
+      uniformOnly: BODY_PART_CONFIG[label].uniformOnly,
       onLengthChange: (value: number) => setBodyPart(label, value, bodyPartState[label].width),
       onWidthChange: (value: number) => setBodyPart(label, bodyPartState[label].length, value),
+      onSizeChange: (value: number) => setBodyPart(label, value, value),
     })),
   });
   equippables.forEach((item) => setEquippableState(item, false));
