@@ -5,9 +5,16 @@ export interface EquipmentItemOptions {
 
 export interface BodyPartOptions {
   label: string;
+  tab: string;
   onLengthChange: (value: number) => void;
   onWidthChange: (value: number) => void;
 }
+
+// Fixed presentation order for the Body Shape tabs, independent of
+// whatever order the caller's bodyParts array happens to arrive in (that
+// order is driven by main.ts's BODY_PART_CONFIG, which is ordered for
+// parent/child compensation correctness, not UI layout).
+const BODY_SHAPE_TAB_ORDER = ["Legs", "Foot", "Arms", "Hand", "Fingers", "Torso"];
 
 export interface ControlPanelOptions {
   animationNames: string[];
@@ -126,17 +133,61 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   bodyShapeHeading.textContent = "Body Shape";
   panel.appendChild(bodyShapeHeading);
 
-  const bodyPartSliders: { length: HTMLInputElement; width: HTMLInputElement }[] = [];
+  const partsByTab = new Map<string, BodyPartOptions[]>();
   for (const part of options.bodyParts) {
-    const partLabel = document.createElement("div");
-    partLabel.className = "body-part-label";
-    partLabel.textContent = part.label;
-    panel.appendChild(partLabel);
-    const lengthSlider = createLabeledSlider("Length", part.onLengthChange);
-    const widthSlider = createLabeledSlider("Width", part.onWidthChange);
-    panel.appendChild(lengthSlider.row);
-    panel.appendChild(widthSlider.row);
-    bodyPartSliders.push({ length: lengthSlider.slider, width: widthSlider.slider });
+    const list = partsByTab.get(part.tab) ?? [];
+    list.push(part);
+    partsByTab.set(part.tab, list);
+  }
+  const tabNames = [
+    ...BODY_SHAPE_TAB_ORDER.filter((tab) => partsByTab.has(tab)),
+    ...[...partsByTab.keys()].filter((tab) => !BODY_SHAPE_TAB_ORDER.includes(tab)),
+  ];
+
+  const tabBar = document.createElement("div");
+  tabBar.className = "body-shape-tab-bar";
+  panel.appendChild(tabBar);
+
+  const tabButtons = new Map<string, HTMLButtonElement>();
+  const tabContainers = new Map<string, HTMLElement>();
+  const bodyPartSliders: { length: HTMLInputElement; width: HTMLInputElement }[] = [];
+
+  const setActiveTab = (tab: string): void => {
+    for (const [name, button] of tabButtons) {
+      button.classList.toggle("active", name === tab);
+    }
+    for (const [name, container] of tabContainers) {
+      container.style.display = name === tab ? "block" : "none";
+    }
+  };
+
+  for (const tab of tabNames) {
+    const tabButton = document.createElement("button");
+    tabButton.textContent = tab;
+    tabButton.addEventListener("click", () => setActiveTab(tab));
+    tabBar.appendChild(tabButton);
+    tabButtons.set(tab, tabButton);
+
+    const container = document.createElement("div");
+    container.className = "body-shape-tab-panel";
+    panel.appendChild(container);
+    tabContainers.set(tab, container);
+
+    for (const part of partsByTab.get(tab) ?? []) {
+      const partLabel = document.createElement("div");
+      partLabel.className = "body-part-label";
+      partLabel.textContent = part.label;
+      container.appendChild(partLabel);
+      const lengthSlider = createLabeledSlider("Length", part.onLengthChange);
+      const widthSlider = createLabeledSlider("Width", part.onWidthChange);
+      container.appendChild(lengthSlider.row);
+      container.appendChild(widthSlider.row);
+      bodyPartSliders.push({ length: lengthSlider.slider, width: widthSlider.slider });
+    }
+  }
+
+  if (tabNames.length > 0) {
+    setActiveTab(tabNames[0]);
   }
 
   const lightingHeading = document.createElement("h2");

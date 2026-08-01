@@ -82,3 +82,26 @@
   text-align: center;
   margin: 4px 0 12px;
 }
+
+#control-panel .body-shape-tab-bar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+#control-panel .body-shape-tab-bar button {
+  width: auto;
+  margin-bottom: 0;
+  padding: 6px 4px;
+  font-size: 11px;
+}
+
+#control-panel .body-shape-tab-bar button.active {
+  background: #556b8a;
+  border-color: #7f9bc2;
+}
+
+#control-panel .body-shape-tab-panel .body-part-label:first-child {
+  margin-top: 0;
+}
