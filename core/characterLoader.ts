@@ -108,6 +108,30 @@ export function stripScaleAnimations(scene: Scene): void {
   }
 }
 
+// Unlike scaling (always a dead constant on every bone), a bone's translation
+// channel is only sometimes dead weight: Hips carries genuine root-motion
+// translation (confirmed by reading Walking.glb's raw keyframe data -- Hips'
+// translation varies by several units across the clip), while non-root bones
+// (LeftUpLeg, LeftLeg, LeftFoot, etc.) bake a constant translation channel
+// with only 2 identical keyframes, the same dead-weight pattern
+// stripScaleAnimations already handles for scale. Stripping indiscriminately
+// would silently delete Hips' root motion, so this only removes translation
+// channels for the specific bones the caller is about to body-shape-edit via
+// rest translation, not every bone in the rig.
+export function stripPositionAnimations(scene: Scene, boneNames: string[]): void {
+  const names = new Set(boneNames);
+  for (const group of scene.animationGroups) {
+    for (const targetedAnimation of [...group.targetedAnimations]) {
+      if (
+        targetedAnimation.animation.targetProperty === "position" &&
+        names.has(targetedAnimation.target?.name)
+      ) {
+        group.removeTargetedAnimation(targetedAnimation.animation);
+      }
+    }
+  }
+}
+
 // Loads a skinned equipment mesh and rebinds it onto an already-loaded
 // skeleton, discarding the duplicate skeleton the glTF brings with it. Only
 // correct if the equipment was authored against the same bone hierarchy/order
