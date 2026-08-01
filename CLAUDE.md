@@ -210,7 +210,9 @@ second consumer exists yet to justify one):
   land between two keyframes instead of on one — it finds the keyframe
   nearest the current position (in case playback was paused
   mid-interpolation) and moves exactly one keyframe index from there,
-  clamped to the clip's ends; pauses first if not already paused, since
+  wrapping around at either end (stepping back from frame 0 goes to the
+  last keyframe, stepping forward from the last keyframe goes to frame 0)
+  rather than clamping; pauses first if not already paused, since
   stepping while playing doesn't make sense. `getCurrentFrame()` returns the
   selected group's frame, rounded — the source clips' authored keyframe
   times carry floating-point noise (e.g. `63.9999980926513672`), so an

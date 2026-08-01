@@ -70,7 +70,10 @@ export class AnimationController {
   // three space keys ~2 apart, not 1), so a fixed delta of 1 would land
   // between two keyframes rather than on one. Finds the keyframe nearest the
   // current position (in case playback was paused mid-interpolation) and
-  // moves exactly one keyframe index from there, clamped to the clip's ends.
+  // moves exactly one keyframe index from there, wrapping around at either
+  // end (stepping back from frame 0 goes to the last keyframe, stepping
+  // forward from the last keyframe goes back to frame 0) rather than
+  // clamping, so repeatedly stepping in one direction cycles the whole clip.
   stepFrame(delta: number): void {
     const group = this.groups[this.currentIndex];
     if (!group) {
@@ -93,7 +96,7 @@ export class AnimationController {
         closestIndex = index;
       }
     });
-    const targetIndex = Math.min(frames.length - 1, Math.max(0, closestIndex + delta));
+    const targetIndex = (((closestIndex + delta) % frames.length) + frames.length) % frames.length;
     group.goToFrame(frames[targetIndex]);
   }
 
