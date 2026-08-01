@@ -6,14 +6,7 @@ export interface EquipmentItemOptions {
 export interface BodyPartOptions {
   label: string;
   tab: string;
-  // When true, renders a single "Size" slider (onSizeChange) instead of
-  // separate Length/Width sliders -- used for body parts that must stay a
-  // uniform scale (length === width) for a compensated child's cancellation
-  // math to be exact at any joint angle (see BODY_PART_CONFIG in main.ts).
-  uniformOnly?: boolean;
   onLengthChange: (value: number) => void;
-  onWidthChange: (value: number) => void;
-  onSizeChange: (value: number) => void;
 }
 
 // Fixed presentation order for the Body Shape tabs, independent of
@@ -205,17 +198,9 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
       partLabel.className = "body-part-label";
       partLabel.textContent = part.label;
       container.appendChild(partLabel);
-      if (part.uniformOnly) {
-        const sizeSlider = createLabeledSlider("Size", part.onSizeChange);
-        container.appendChild(sizeSlider.row);
-        bodyPartSliders.push(sizeSlider);
-      } else {
-        const lengthSlider = createLabeledSlider("Length", part.onLengthChange);
-        const widthSlider = createLabeledSlider("Width", part.onWidthChange);
-        container.appendChild(lengthSlider.row);
-        container.appendChild(widthSlider.row);
-        bodyPartSliders.push(lengthSlider, widthSlider);
-      }
+      const lengthSlider = createLabeledSlider("Length", part.onLengthChange);
+      container.appendChild(lengthSlider.row);
+      bodyPartSliders.push(lengthSlider);
     }
   }
 

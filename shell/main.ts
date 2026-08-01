@@ -49,127 +49,62 @@ interface EquippableItem {
 }
 
 interface BodyPartConfig {
-  bones: string[];
   tab: string;
-  // Bones form a hierarchy, so a parent's local scale unconditionally
-  // multiplies through every descendant (Babylon composes a child's world
-  // transform as parent.worldMatrix * child.localMatrix). Dividing this
-  // label's desired length/width by the parent label's CURRENT
-  // bodyPartState value cancels that inherited scale -- but only exactly
-  // if the parent's own scale is uniform. A non-uniform parent scale
-  // (length != width) reaches a rotated child as R⁻¹·S_parent·R, which is
-  // only equal to S_parent (i.e. cancels cleanly via simple division) when
-  // R is identity; for any real rotation it shears instead. This was first
-  // caught via rest-pose rotation alone (pairs under ~20 degrees looked
-  // safe, e.g. the knee's 2.18 degrees), but rest pose only describes the
-  // BIND pose -- it says nothing about how far a joint actually rotates
-  // during a specific animation. Running's mid-stride knee bend is far
-  // from rest pose, and confirmed to produce real, visible shear despite
-  // the "safe" rest-pose classification, worse the more extreme the
-  // slider values (Size max + Upper Leg 200% turned a modest percentage
-  // residual into the foot rendering far below the ground plane at
-  // certain frames). Left undefined where the rest-pose rotation alone
-  // was already too large for even a best-case simple division to work
-  // (e.g. the ~65 degree ankle bend between Lower Leg and Upper Foot, or
-  // the thumb's ~40 degree opposable rest orientation) -- those segments
-  // are left to cascade from their parent, same as Hips is deliberately
-  // left to cascade into everything below it as a "resize the whole area"
-  // macro control, matching this project's earlier Belly/Spine1 precedent.
-  parentLabel?: string;
-  // A uniform scale (length === width) commutes with ANY rotation --
-  // R⁻¹·(k·I)·R = k·I regardless of R -- so forcing a compensated pair's
-  // PARENT to be uniform-only makes that pair's compensation exactly
-  // shear-free at any joint angle, with no dependency on staying near rest
-  // pose. This must propagate down any chain of compensated pairs: a bone
-  // that is itself a child in one pair and a parent in another (e.g. Lower
-  // Arm compensates against Upper Arm, and Hand compensates against Lower
-  // Arm) must ALSO be uniform-only for the pair below it to be exact, even
-  // though its own compensation against its own parent doesn't need it.
-  // Rendered as a single "Size" slider instead of separate Length/Width
-  // (see ui.ts).
-  uniformOnly?: boolean;
+  // Translation-based length (see docs/other/PLAN_translation_based_body_shape.MD):
+  // this label's length lives in these bones' own rest-pose translation --
+  // a bone's visual length (the segment from its own joint to its child's
+  // joint) is stored on its CHILD, not itself, confirmed per bone group by
+  // parsing Walking.glb's raw node data directly, not assumed to generalize
+  // from one group to the next (e.g. Upper Leg's length target is LeftLeg,
+  // Lower Leg's is LeftFoot -- one level further down the chain each time).
+  lengthBones?: string[];
+  // Interim Scale-based fallback for labels not yet converted (Hips, Hand,
+  // Spine, Fingers -- Phase 3) and for Lower Foot permanently (a leaf bone
+  // with no child to carry a translation-based length at all). Width no
+  // longer exists as a control, so this always scales with width pinned to
+  // 1 -- length-only, same single slider as the translation-based labels.
+  bones?: string[];
 }
 
-// Order matters here: a label referencing `parentLabel` must be defined
-// AFTER that parent, so resetAll's single reset pass (see below) computes
-// each label's compensation against an already-reset parent instead of a
-// stale one.
 const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
   Hips: { bones: ["mixamorig:Hips"], tab: "Torso" },
-  Spine: { bones: ["mixamorig:Spine"], tab: "Torso", uniformOnly: true },
-  Chest: { bones: ["mixamorig:LeftShoulder", "mixamorig:RightShoulder"], tab: "Torso", uniformOnly: true },
-  Neck: { bones: ["mixamorig:Neck"], tab: "Torso", parentLabel: "Spine", uniformOnly: true },
-  Head: { bones: ["mixamorig:Head"], tab: "Torso", parentLabel: "Neck" },
+  Spine: { bones: ["mixamorig:Spine"], tab: "Torso" },
+  Chest: { lengthBones: ["mixamorig:LeftArm", "mixamorig:RightArm"], tab: "Torso" },
+  Neck: { lengthBones: ["mixamorig:Head"], tab: "Torso" },
+  Head: { lengthBones: ["mixamorig:HeadTop_End"], tab: "Torso" },
 
-  "Upper Leg": {
-    bones: ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg"],
-    tab: "Legs",
-    uniformOnly: true,
-  },
-  "Lower Leg": {
-    bones: ["mixamorig:LeftLeg", "mixamorig:RightLeg"],
-    tab: "Legs",
-    parentLabel: "Upper Leg",
-  },
+  "Upper Leg": { lengthBones: ["mixamorig:LeftLeg", "mixamorig:RightLeg"], tab: "Legs" },
+  "Lower Leg": { lengthBones: ["mixamorig:LeftFoot", "mixamorig:RightFoot"], tab: "Legs" },
 
-  "Upper Foot": { bones: ["mixamorig:LeftFoot", "mixamorig:RightFoot"], tab: "Foot" },
-  "Middle Foot": {
-    bones: ["mixamorig:LeftToeBase", "mixamorig:RightToeBase"],
-    tab: "Foot",
-    uniformOnly: true,
-  },
-  "Lower Foot": {
-    bones: ["mixamorig:LeftToe_End", "mixamorig:RightToe_End"],
-    tab: "Foot",
-    parentLabel: "Middle Foot",
-  },
+  "Upper Foot": { lengthBones: ["mixamorig:LeftToeBase", "mixamorig:RightToeBase"], tab: "Foot" },
+  "Middle Foot": { lengthBones: ["mixamorig:LeftToe_End", "mixamorig:RightToe_End"], tab: "Foot" },
+  // Leaf bone (LeftToe_End/RightToe_End have no children) -- no node exists
+  // to carry a translation-based length, so this stays Scale-based
+  // permanently. Safe: nothing is compensated against a leaf's own
+  // non-uniformity, so there's no shear risk to justify converting it even
+  // if a translation target existed.
+  "Lower Foot": { bones: ["mixamorig:LeftToe_End", "mixamorig:RightToe_End"], tab: "Foot" },
 
-  "Upper Arm": {
-    bones: ["mixamorig:LeftArm", "mixamorig:RightArm"],
-    tab: "Arms",
-    parentLabel: "Chest",
-    uniformOnly: true,
-  },
-  "Lower Arm": {
-    bones: ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"],
-    tab: "Arms",
-    parentLabel: "Upper Arm",
-    uniformOnly: true,
-  },
+  "Upper Arm": { lengthBones: ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"], tab: "Arms" },
+  "Lower Arm": { lengthBones: ["mixamorig:LeftHand", "mixamorig:RightHand"], tab: "Arms" },
 
-  Hand: {
-    bones: ["mixamorig:LeftHand", "mixamorig:RightHand"],
-    tab: "Hand",
-    parentLabel: "Lower Arm",
-    uniformOnly: true,
-  },
+  // LeftHand/RightHand fan out into 5 children (one per finger) -- no
+  // single child represents "hand length" the way a simple chain does.
+  // Stays interim Scale-based until Phase 3's proportional-children design
+  // (same pattern as Hips).
+  Hand: { bones: ["mixamorig:LeftHand", "mixamorig:RightHand"], tab: "Hand" },
 
-  // Chain-root technique: each finger's 4 segments (…1/2/3/4) are chained
-  // bones with near-identity rest-pose rotation between them, so only the
-  // root segment is listed here -- scaling it cascades cleanly down the
-  // whole finger via hierarchy inheritance instead of compounding by
-  // setting the same scale on all 4 segments independently.
+  // Interim Scale-based (chain controls, Phase 3): each finger's 4 segments
+  // (…1/2/3/4) are chained bones with near-identity rest-pose rotation
+  // between them, so only the root segment is listed here -- scaling it
+  // cascades cleanly down the whole finger via hierarchy inheritance
+  // instead of compounding by setting the same scale on all 4 segments
+  // independently.
   Thumb: { bones: ["mixamorig:LeftHandThumb1", "mixamorig:RightHandThumb1"], tab: "Fingers" },
-  Index: {
-    bones: ["mixamorig:LeftHandIndex1", "mixamorig:RightHandIndex1"],
-    tab: "Fingers",
-    parentLabel: "Hand",
-  },
-  Middle: {
-    bones: ["mixamorig:LeftHandMiddle1", "mixamorig:RightHandMiddle1"],
-    tab: "Fingers",
-    parentLabel: "Hand",
-  },
-  Ring: {
-    bones: ["mixamorig:LeftHandRing1", "mixamorig:RightHandRing1"],
-    tab: "Fingers",
-    parentLabel: "Hand",
-  },
-  Pinky: {
-    bones: ["mixamorig:LeftHandPinky1", "mixamorig:RightHandPinky1"],
-    tab: "Fingers",
-    parentLabel: "Hand",
-  },
+  Index: { bones: ["mixamorig:LeftHandIndex1", "mixamorig:RightHandIndex1"], tab: "Fingers" },
+  Middle: { bones: ["mixamorig:LeftHandMiddle1", "mixamorig:RightHandMiddle1"], tab: "Fingers" },
+  Ring: { bones: ["mixamorig:LeftHandRing1", "mixamorig:RightHandRing1"], tab: "Fingers" },
+  Pinky: { bones: ["mixamorig:LeftHandPinky1", "mixamorig:RightHandPinky1"], tab: "Fingers" },
 };
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
@@ -221,33 +156,26 @@ async function main() {
     await loadAnimationClip(scene, "/characters/", file);
   }
   stripScaleAnimations(scene);
-  // Spike (0.6.22): prove translation-based bone length on Lower Leg only,
-  // see docs/other/PLAN_translation_based_body_shape.MD. A bone's visual
-  // length (the segment from its own joint to its child's joint) is stored
-  // in its CHILD's translation, not its own -- confirmed by parsing
-  // Walking.glb's raw node data: mixamorig:LeftLeg's translation.y (40.6)
-  // is actually the THIGH's length (Upper Leg), and mixamorig:LeftFoot's
-  // translation.y (42.1) is the SHIN's length (Lower Leg, the bone this
-  // spike targets) -- the opposite of scaleBodyPart's convention, where
-  // scaling a bone's OWN scale is what stretches its own segment. So
-  // "Lower Leg" length is edited via LeftFoot/RightFoot's translation, not
-  // LeftLeg/RightLeg's (which stays Scale-based here for Width, since that
-  // still directly stretches the shin's own weighted geometry).
-  const LOWER_LEG_LENGTH_BONES = ["mixamorig:LeftFoot", "mixamorig:RightFoot"];
-  // LeftFoot/RightFoot's translation channel is a baked-constant dead
-  // weight, same pattern as the scale=1 channel stripScaleAnimations
-  // already handles (confirmed by parsing Walking.glb's raw keyframe data:
-  // 2 identical keys), but unlike scale this can't be stripped rig-wide --
-  // Hips carries genuine root motion in its own translation channel -- so
-  // this only targets the specific bones about to be edited via rest
-  // translation.
-  stripPositionAnimations(scene, LOWER_LEG_LENGTH_BONES);
+  // Translation-based bone length (see docs/other/PLAN_translation_based_body_shape.MD):
+  // a bone's visual length (the segment from its own joint to its child's
+  // joint) is stored in its CHILD's translation, not its own -- confirmed
+  // per bone group by parsing Walking.glb's raw node data directly (e.g.
+  // mixamorig:LeftLeg's translation.y is actually the THIGH's length
+  // (Upper Leg), one level further down the chain than the bone it's
+  // named after) -- the opposite of scaleBodyPart's convention, where
+  // scaling a bone's OWN scale is what stretches its own segment.
+  const lengthBones = Object.values(BODY_PART_CONFIG).flatMap((config) => config.lengthBones ?? []);
+  // These translation channels are baked-constant dead weight, same
+  // pattern as the scale=1 channel stripScaleAnimations already handles
+  // (confirmed by parsing Walking.glb's raw keyframe data: 2 identical
+  // keys per bone checked), but unlike scale this can't be stripped
+  // rig-wide -- Hips carries genuine root motion in its own translation
+  // channel -- so this only targets the specific bones being edited via
+  // rest translation.
+  stripPositionAnimations(scene, lengthBones);
   // Captured once, before any body-shape edit -- translateBodyPart's fixed
-  // reference point for every subsequent Lower Leg length ratio.
-  const lowerLegRestTranslations = captureRestTranslations(
-    character.skeletons[0],
-    LOWER_LEG_LENGTH_BONES,
-  );
+  // reference point for every subsequent length ratio.
+  const restTranslations = captureRestTranslations(character.skeletons[0], lengthBones);
 
   const animationController = new AnimationController(scene.animationGroups);
   animationController.play();
@@ -314,34 +242,19 @@ async function main() {
   };
 
   const bodyPartState = Object.fromEntries(
-    Object.keys(BODY_PART_CONFIG).map((label) => [label, { length: 1, width: 1 }]),
+    Object.keys(BODY_PART_CONFIG).map((label) => [label, 1]),
   );
   const applyBodyPart = (label: string) => {
     const config = BODY_PART_CONFIG[label];
-    const state = bodyPartState[label];
-    let length = state.length;
-    let width = state.width;
-    if (config.parentLabel) {
-      const parentState = bodyPartState[config.parentLabel];
-      length /= parentState.length;
-      width /= parentState.width;
-    }
-    // Spike (0.6.22): Lower Leg's length goes through rest-pose translation
-    // instead of Scale (see docs/other/PLAN_translation_based_body_shape.MD).
-    // Width stays Scale-based for now -- Phase 2 removes Width entirely --
-    // so Scale's own length factor is pinned to 1 here to avoid double-
-    // applying length on top of the translation edit.
-    if (label === "Lower Leg") {
-      translateBodyPart(
-        character.skeletons[0],
-        LOWER_LEG_LENGTH_BONES,
-        lowerLegRestTranslations,
-        length,
-      );
-      scaleBodyPart(character.skeletons[0], config.bones, 1, width);
+    const length = bodyPartState[label];
+    if (config.lengthBones) {
+      translateBodyPart(character.skeletons[0], config.lengthBones, restTranslations, length);
       return;
     }
-    scaleBodyPart(character.skeletons[0], config.bones, length, width);
+    // Interim Scale-based fallback (Hips, Hand, Spine, Fingers -- Phase 3;
+    // Lower Foot permanently, a leaf bone with no translation target).
+    // Width no longer exists as a control, so it's always pinned to 1.
+    scaleBodyPart(character.skeletons[0], config.bones!, length, 1);
   };
 
   // Any bone between the hips and the toe (Upper Leg, Lower Leg, Feet) hangs
@@ -445,7 +358,7 @@ async function main() {
   // (matrix math, no rendering) are cheap enough that the redundant
   // sampling for unrelated labels isn't noticeable.
   const GROUND_SAMPLE_COUNT = 40;
-  const setBodyPart = (label: string, length: number, width: number) => {
+  const setBodyPart = (label: string, length: number) => {
     const group = animationController.getCurrentGroup();
     const originalFrame = group?.getCurrentFrame();
     const sampleFrames = group
@@ -463,14 +376,11 @@ async function main() {
       beforeRight.push(measureFootY(rightToeBaseNode));
     }
 
-    bodyPartState[label] = { length, width };
-    // Reapply every label, not just this one: other labels' compensation
-    // (see BODY_PART_CONFIG.parentLabel) divides by THIS label's state, so
-    // leaving them stale here would measure the ground-height delta against
-    // a transient, not-yet-settled pose -- the same class of bug already
-    // fixed once this session for a single-level case, now correctness-
-    // critical since dependencies run several levels deep (Head depends on
-    // Neck depends on Spine).
+    bodyPartState[label] = length;
+    // Reapply every label, not just this one: some interim Scale-based
+    // labels still cascade into their own descendants via hierarchy
+    // inheritance, so leaving them stale here would measure the
+    // ground-height delta against a transient, not-yet-settled pose.
     for (const otherLabel of Object.keys(BODY_PART_CONFIG)) {
       applyBodyPart(otherLabel);
     }
@@ -533,7 +443,7 @@ async function main() {
 
   const resetAll = () => {
     for (const label of Object.keys(BODY_PART_CONFIG)) {
-      bodyPartState[label] = { length: 1, width: 1 };
+      bodyPartState[label] = 1;
       applyBodyPart(label);
     }
     groundOffsetAtSize1 = 0;
@@ -585,10 +495,7 @@ async function main() {
     bodyParts: Object.keys(BODY_PART_CONFIG).map((label) => ({
       label,
       tab: BODY_PART_CONFIG[label].tab,
-      uniformOnly: BODY_PART_CONFIG[label].uniformOnly,
-      onLengthChange: (value: number) => setBodyPart(label, value, bodyPartState[label].width),
-      onWidthChange: (value: number) => setBodyPart(label, bodyPartState[label].length, value),
-      onSizeChange: (value: number) => setBodyPart(label, value, value),
+      onLengthChange: (value: number) => setBodyPart(label, value),
     })),
   });
   equippables.forEach((item) => setEquippableState(item, false));
