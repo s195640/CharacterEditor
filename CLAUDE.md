@@ -217,6 +217,15 @@ second consumer exists yet to justify one):
   walk doesn't see attachToBone'd nodes at all — compensating scale by the
   bone node's inverse `absoluteScaling`, computed once at load time so it
   keeps tracking proportionally if the character is rescaled afterward),
+  `stripPositionAnimations(scene, boneNames)` (added for translation-based
+  body-shape length, see `bodyShape.ts`/`main.ts` below — unlike
+  `stripScaleAnimations`, this only strips the *named* bones' translation
+  channels, never rig-wide: `Hips` carries genuine root-motion translation
+  that must not be stripped, confirmed by parsing a clip's raw keyframe
+  data directly — Hips' translation channel varies by several units across
+  a clip, while every other bone checked has only 2 identical keyframes,
+  the same dead-weight-constant pattern `stripScaleAnimations` handles for
+  scale),
   `animationController.ts` (wraps
   `AnimationGroup[]` — `play(name?)`, `next()` to cycle through all loaded
   clips, `stop()`, `list()`, `setSpeed(ratio)` sets `speedRatio` on every
@@ -244,179 +253,61 @@ second consumer exists yet to justify one):
   unrounded readout would show a confusing near-integer instead of the
   actual keyframe number. `getCurrentGroup()` exposes the raw selected
   `AnimationGroup` for callers needing lower-level access than the wrapper
-  methods provide — currently only `main.ts`'s ground-height compensation,
-  which needs the precise unrounded frame and the `[from, to]` range to
-  sample multiple poses (see `bodyShape.ts`'s ground-height compensation
-  entry below)), `bodyShape.ts`
+  methods provide — used by `legIK.ts`'s per-frame solve, which needs the
+  precise unrounded frame to sample the baseline (see `legIK.ts` below)),
+  `bodyShape.ts`
   (`getBoneNode(skeleton, name)` —
   shared lookup, throws if the bone or its linked `TransformNode` is missing;
-  `scaleBodyPart(skeleton, boneNames, length, width)` reshapes a body part by
-  scaling each named bone's node — Y is the bone-length axis and X/Z are
-  width, confirmed rig-wide by inspecting bone-to-child local translations,
-  not assumed. Only needs applying once per slider change (`setBodyPart` in
-  `main.ts`), not every frame — the retargeted animations' baked constant
-  scale=1 track that used to silently overwrite manual scaling within a
-  frame or two is now stripped at load time (see `characterLoader.ts`'s
-  `stripScaleAnimations` above), so nothing fights the assignment anymore.
-  Any bone between the hips and the toe (Upper Leg, Lower Leg,
-  Feet) also needs a **ground-height compensation**, applied in `main.ts`:
-  lengthening one pushes the foot further from the hip — i.e. down, through
-  the ground — since legs hang downward, not the character growing taller
-  with feet planted. A first attempt derived the expected compensation from
-  rest-pose bone offsets times the hips' `absoluteScaling`; that value turned
-  out unreliable for a bone-linked node (read back as a bare `1` at rest,
-  didn't scale proportionally once actually stretched) — confirmed by
-  comparing predicted vs. actual foot-drop across several slider values,
-  which diverged non-linearly. A second attempt measured the foot's world
-  position every frame and forced it to a fixed height continuously; that
-  "worked" in Idle but fought the character's own gait during Running (a
-  run cycle lifts each foot off the ground for part of its cycle by design)
-  — locking the left foot flat forced the whole character to bob to
-  compensate, which threw the right foot's independent swing out of sync
-  and dropped it below the ground (confirmed: right toe swung from -0.62 to
-  +0.62 world-Y over one running cycle with zero body-shape sliders
-  touched). A third attempt measured only the left foot's before/after delta
-  on slider change (both reads forced via `computeWorldMatrix(true)` and
-  taken synchronously within the same tick, so the delta reflects only the
-  scale change, not gait motion) and added it once into `rootNode.position.y`
-  — solid for gait, but left two gaps: mid-stride the legs aren't vertical,
-  so the same scale change drops the left and right foot by slightly
-  different amounts, and canceling one exactly left the other dipping
-  slightly into the ground; and the offset was stored as a fixed world-space
-  number, so changing Size afterward rescaled the actual drop but not the
-  stored offset meant to cancel it, visibly lifting or sinking the character.
-  A fourth attempt averaged both feet's measured delta at that one instant
-  (reduced, didn't eliminate, the dip) and stored the accumulated offset
-  normalized to Size 1.0 (`groundOffsetAtSize1`), re-multiplying by the
-  current Size (`sizeValue`) every time either a body-shape slider or Size
-  itself changes (`applyRootTransform`) — Size is a uniform scale set
-  directly by this code, not read back from an unreliable engine property,
-  so multiplying by it is exact, unlike the first attempt's
-  `absoluteScaling` formula (this part of the fix still stands). But a real
-  bug report exposed the deeper gap this attempt still had: it measured the
-  delta at whichever single pose happened to be active when the slider
-  moved, and a leg segment's actual vertical drop from a given scale change
-  depends on the segment's *current orientation* — which varies
-  substantially across a gait cycle (the shin swings much further from
-  vertical than the thigh does, especially in Running). Lower Leg 200%
-  looked correctly compensated in a static Idle pose, but during Running
-  dipped the foot as low as -0.21 world-Y (vs. a +0.05 baseline minimum
-  with no scaling) at frames far from whatever pose was active when the
-  slider was dragged.
-  The current fix (`setBodyPart` in `main.ts`) samples the delta at 40
-  evenly spaced frames across the *currently selected* animation's whole
-  `[from, to]` range instead of one instant (two passes — measure every
-  sample frame with the old state via `AnimationGroup.goToFrame`, commit
-  the change, measure every sample frame again with the new state, then
-  `goToFrame` back to the exact original frame — captured via
-  `AnimationController.getCurrentGroup()`, which exposes the raw group
-  since `getCurrentFrame()` rounds for display and isn't precise enough to
-  restore from; this all happens synchronously within one slider `input`
-  handler before any render occurs, confirmed to leave the displayed frame
-  bit-exact afterward when paused) — and takes the worst-case (largest)
-  delta across BOTH feet independently, not their average: left and right
-  legs are roughly out of phase during locomotion, so each foot's
-  worst-case dip happens at a different sampled frame, and averaging the
-  two at each frame before taking the max was found to still understate
-  what either foot individually needed at its own worst moment (confirmed:
-  averaging still left a small but real negative dip that more samples
-  alone didn't close; switching to a true per-foot max closed it
-  completely across every case tested). This guarantees the foot never
-  dips below its own natural baseline height at any frame of the selected
-  clip's cycle — frames where the actual drop was smaller than the worst
-  case end up with the foot slightly above its natural baseline instead, a
-  far less jarring result than clipping through the ground. Measured at
-  ~3.5ms average per slider change in-browser (max ~7ms), well within
-  interactive range. Known remaining limitation: this samples the
-  currently selected animation only, so setting a leg slider on Idle then
-  switching to Running could still show some residual drift — a smaller,
-  more familiar category of limitation than the one just fixed, not
-  addressed here. This runs
-  only from the slider callbacks, not the per-frame loop, so gait motion is
-  left untouched; this is also why splitting Legs into Upper/Lower and
-  adding separate Foot controls needed no changes to the compensation logic
-  at all, only to the bone-name list.
-  **Parent/child hierarchy compensation** (separate from the ground-height
-  one above): bones form a hierarchy, so a parent's local `.scaling`
-  unconditionally multiplies through every descendant (Babylon composes a
-  child's world transform as `parent.worldMatrix * child.localMatrix`) —
-  moving e.g. Upper Leg's slider used to visibly resize the whole leg
-  including Lower Leg and Foot, not just the thigh, because `LeftLeg` is a
-  child bone of `LeftUpLeg`. Fixed in `main.ts`'s `BODY_PART_CONFIG` (not
-  `bodyShape.ts` — `scaleBodyPart` itself needed no changes, this is a
-  Shell-level bone-grouping decision): a bone group can name a
-  `parentLabel`, and `applyBodyPart` divides that group's desired
-  length/width by the parent label's *current* `bodyPartState` value before
-  calling `scaleBodyPart`, canceling the inherited scale. Whether a pair
-  gets compensated at all was decided by parsing `Walking.glb`'s glTF node
-  rotations directly for the parent→child bone's *rest-pose* rotation
-  (compensating under ~20°, leaving larger ones as an accepted cascade —
-  documented below) — but a real bug report (Size max, Upper Leg 200%,
-  Running frame 22: foot far below the ground plane, Upper Leg still
-  visibly resizing Lower Leg despite the division) showed this rest-pose
-  check alone doesn't make simple division reliable: it only guarantees
-  the bones are *structurally* aligned at bind pose, not that they stay
-  aligned while a specific clip is actively animating that joint away from
-  rest pose — a near-identity rest-pose pair (Neck→Head, 0.0°) still
-  showed a ~4.9% residual during Idle's subtle sway, and the knee's dynamic
-  range during Running is a much larger version of the same effect,
-  amplified by extreme slider values into large absolute world units.
-  Confirmed via Babylon's own source (`Bones/skeleton.js`'s `prepare()`,
-  `Bones/bone.pure.js`'s `_compose()`) that a mathematically exact,
-  rotation-aware fix isn't achievable at all for `linkTransformNode`-based
-  bones: skinning reads only `bone.position`/`bone.rotationQuaternion`/
-  `bone.scaling` (plain properties recomposed via clean TRS, no shear
-  representable at any point in that pipeline), regardless of whether the
-  correction is computed live or pre-baked into keyframe data — both are
-  in the same representable space. The actual fix that *is* exact and
-  achievable: a parent's scale contribution reaches a rotated child as
-  `R⁻¹·S_parent·R`, which equals `S_parent` unchanged for *any* rotation R
-  if and only if `S_parent` is uniform (`k·I` — a scalar multiple of
-  identity commutes with every rotation). So any `BODY_PART_CONFIG` group
-  that is itself a *parent* in a compensated pair also sets
-  `uniformOnly: true`, rendering one "Size" slider instead of separate
-  Length/Width (`ui.ts` reads the flag) — this makes that pair's
-  compensation exactly shear-free at any joint angle, confirmed via a real
-  Running-frame reproduction (0.00% residual across 10 dynamic frames, vs.
-  the old division-only approach's several-percent-and-up residual) and
-  via the original bug report's exact repro (foot Y went from far below
-  the ground plane to within centimeters of the pre-existing baseline).
-  This must propagate down any chain of compensated pairs: a bone that is
-  itself a *child* in one pair and a *parent* in another (Lower Arm
-  compensates against Upper Arm, and Hand in turn compensates against
-  Lower Arm) must ALSO be `uniformOnly` for the pair *below* it to be
-  exact, even though its own compensation against its own parent doesn't
-  need it. Currently `uniformOnly`: `Upper Leg`, `Middle Foot`, `Chest`,
-  `Upper Arm`, `Lower Arm`, `Hand`, `Spine`, `Neck` — every current
-  `parentLabel` target. Everything else keeps full independent
-  Length/Width (nothing compensates against them, so no shear risk):
-  `Lower Leg`, `Lower Foot`, `Upper Foot`, `Thumb`, `Index`/`Middle`/
-  `Ring`/`Pinky`, `Head`, `Hips`.
-  For multi-segment "chain" controls (Fingers, Spine, each one
-  slider spanning 3-4 chained bones), the technique is to list *only the
-  chain's root bone* in that group's bone array (e.g. `"Spine":
-  ["mixamorig:Spine"]`, omitting `Spine1`/`Spine2` entirely) and let
-  hierarchy inheritance cascade the same scale down the interior joints
-  (confirmed near-identity) rather than setting the same value on every
-  bone in the chain independently, which would compound.
-  Deliberately-uncompensated pairs remain, either because the rest-pose
-  rotation is too large for even a uniform-parent fix to help (shear from
-  rotation alone, independent of the parent's own uniformity, still isn't
-  addressed by this technique — a uniform parent scale commutes with
-  rotation, but these pairs were never given a `parentLabel` at all) or as
-  a design choice: Upper Foot and Middle Foot still cascade from the Leg
-  chain and from each other (`Leg`→`Foot`: 65.5°, `Foot`→`ToeBase`: 26.7°
-  — the ankle/toe bends; this is why the original bug's foot-position
-  symptom improved dramatically but not to an exact zero — the still-
-  uncompensated Leg→Foot link remains); Thumb still cascades from Hand's
-  own slider (`Hand`→`Thumb1`: 39.9°, the thumb's opposable rest
-  orientation); Hips cascades into everything below it by deliberate
-  design, not because the rotation forced it (`Hips`→`Spine` is only 7.0°,
-  technically compensable) — Hips is treated as an intentional "resize the
-  whole pelvis area" macro control, the same role `Belly`/`Spine1` played
-  before it was retired in favor of the unified `Spine` control (Spine
-  itself is `uniformOnly` since Neck compensates against it, but nothing
-  compensates against Hips, so Hips stays fully independent),
+  `scaleBodyPart(skeleton, boneNames, length, width)` sets each named bone
+  node's local scale directly — Y is the bone-length axis, X/Z are width,
+  confirmed rig-wide by inspecting bone-to-child local translations, not
+  assumed. This used to be the primary body-shape mechanism (every part,
+  both Length and Width); as of Milestone 6's translation-based rewrite
+  (`0.6.22`–`0.6.26`, see `docs/other/PLAN_translation_based_body_shape.MD`
+  and `docs/other/LEG_BODY_SHAPE_MATH.md` for the full history that led
+  here) it survives only as the fallback for labels with no translation
+  target — `width` is always passed as `1` now, since Width no longer
+  exists as a user control anywhere;
+  `captureRestTranslations(skeleton, boneNames)` / `translateBodyPart(skeleton,
+  boneNames, restTranslations, length)` are the *current* primary length
+  mechanism: `translateBodyPart` sets each named node's local `.position.y`
+  to `restTranslations[name].y * length`, leaving X/Z untouched.
+  **Critical, non-obvious rule**: a bone's own visual length (the segment
+  from its own joint to its child's joint) lives in its *child's*
+  translation, not its own — confirmed by parsing `Walking.glb`'s raw node
+  data directly, and re-derived per bone group rather than assumed to
+  generalize (a first attempt targeting `mixamorig:LeftLeg`'s own
+  translation for the "Lower Leg" (shin) control actually moved the
+  *thigh*, since `LeftLeg`'s translation is `LeftUpLeg`'s length — the
+  correct shin target is `LeftFoot`'s translation, one level further down
+  the chain). This has real structural fallout: **leaf bones** (no
+  children — Lower Foot's `Toe_End`) have no node to carry a
+  translation-based length at all, and stay on `scaleBodyPart` permanently
+  (safe: nothing is compensated against a leaf's own non-uniformity, so
+  there's no shear risk either); bones with **multiple children** (Hips —
+  `LeftUpLeg`/`RightUpLeg`/`Spine`; Hand — five fingers) have no single
+  child to represent "this label's length", so their control instead
+  scales *all* of their direct children's rest translations proportionally
+  by the same ratio (`lengthBones` naming every child); and multi-segment
+  **chain controls** (Spine, each Finger) need every segment's
+  length-carrying child listed explicitly in `lengthBones`, since
+  translation — unlike Scale — doesn't cascade down a hierarchy on its
+  own, so a single root-bone entry no longer stretches the whole chain for
+  free the way scaling did. Reasoned through and empirically confirmed
+  bone-by-bone in `main.ts`'s `BODY_PART_CONFIG` (see below) — this file
+  documents the *mechanism*, `main.ts` documents *which bone maps to
+  which*.
+  Translation-based length has one asset-level limitation worth knowing
+  before assuming a visual gap is a code bug: this rig's mesh has **zero
+  blended skin weights at any joint** (confirmed by parsing both mesh
+  primitives' raw `JOINTS_0`/`WEIGHTS_0` vertex data directly — every
+  vertex is influenced by exactly one bone). Scale-based length used to
+  stretch a bone's own weighted vertices continuously; translation-based
+  length only *repositions* the child joint, so on a hard-boundary-skinned
+  mesh it will always show a visible gap at non-1.0 values, at any bone —
+  confirmed and explicitly accepted as a known, deferred asset limitation
+  (re-skinning the mesh with blended joint weights, or replacing it, would
+  resolve it; not attempted as part of this rewrite),
   `exporter.ts`
   (`exportCharacter` calls `GLTF2Export.GLBAsync`, excluding nodes via a
   caller-supplied `shouldExportNode`, and builds a minimal manifest — source
@@ -426,6 +317,101 @@ second consumer exists yet to justify one):
   Operates on Babylon `Scene`/`AnimationGroup` objects (the rendering engine is
   a locked architectural decision, not "app UI") but has no DOM/UI-panel code
   and no assumptions about how it's hosted.
+- `core/legIK.ts` — real per-frame two-bone IK foot-locking on the leg → foot
+  chain, using Babylon's built-in `BoneIKController` rather than hand-rolled
+  law-of-cosines (reuses a shipped, tested solver). Replaces an earlier
+  scalar root-offset system entirely (see `LEG_BODY_SHAPE_MATH.md` for that
+  system's own history) — that approach sampled foot-height delta against
+  whichever clip was selected when a slider moved, so it silently broke the
+  moment the user switched to a different animation afterward; real IK
+  fixes this by solving fresh against a per-clip baseline every frame,
+  regardless of which clip is currently playing.
+  `captureLegBaseline(group, skeleton, ikSpace, hipBone, kneeBone, ankleBone,
+  sampleCount)` samples a clip's full frame range once, right after load
+  and before any body-shape edit, recording the ankle's and knee's position
+  *relative to the hip* at each sampled frame — the fixed anatomical target
+  every subsequent leg-length customization gets solved against, independent
+  of proportions. **`AnimationGroup.goToFrame` is a no-op until the group
+  has been started at least once** (confirmed by reading
+  `animationGroup.pure.js`: `if (!this._isStarted) return this;`) — baseline
+  capture originally ran before `AnimationController.play()` had started
+  any group, so every scrub silently did nothing; fixed by having
+  `captureLegBaseline` call `group.play(false)` before scrubbing.
+  `sampleLegBaseline(samples, frame)` linearly interpolates between the two
+  bracketing samples for a live (continuous) playback frame.
+  `syncBonesFromLinkedTransformNodes(skeleton)` replicates just the
+  bone-sync half of `Skeleton.prepare()` (copy `.position`/
+  `.rotationQuaternion`/`.scaling` from each bone's linked `TransformNode`,
+  then `computeAbsoluteMatrices(true)`) without its skin-matrix-computation
+  half — needed because `prepare()` itself doesn't run until later in the
+  frame (during mesh rendering) than `onBeforeRenderObservable`, so a
+  Bone-level read at that point would see last frame's stale pose; calling
+  the *real* `prepare()` here would also freeze in the pre-IK pose for that
+  frame's render, since Babylon's own later `prepare()` call would then see
+  the render ID already matches and skip re-running.
+  `createLegIKChain(ikSpace, kneeBone)` constructs a `BoneIKController`
+  (bone1/thigh is auto-inferred as the knee bone's parent), overriding its
+  default pole-target-tracks-Hips behavior (`poleTargetBone = null`) so the
+  per-frame solve's own baseline-derived pole target takes effect instead.
+  **`ikSpace`** is the single most important, least obvious piece of this
+  module: an inert, never-parented, identity-transform `TransformNode`,
+  created solely to satisfy `BoneIKController`'s non-nullable `mesh`
+  constructor argument — deliberately *not* the real character mesh. This
+  rig's scene-graph root (`__root__`, above the `Armature` node that
+  carries the actual ~0.01 import scale) has a mirrored `[1,1,-1]` scale, a
+  Blender FBX→glTF conversion artifact. Bridging `BoneIKController`'s
+  world-space rotation math through the real, mirrored mesh corrupts it:
+  confirmed empirically that a single `controller.update()` call left a
+  bone's `.scaling` at `~100` — the exact inverse of the rig's import
+  scale — instead of its correct `1`, collapsing the whole leg into the
+  hip; root-caused by reading `Bone._rotateWithMatrix`'s source, whose
+  world-space path round-trips a `parentScale`/`parentScaleInv` derived
+  from the bridging node's world matrix, and silently fails to cancel back
+  to the original scale when that matrix has a mirrored (negative-
+  determinant) component. Bridging through `ikSpace` instead sidesteps the
+  mirrored determinant entirely, since it carries no scale or mirror at
+  all — confirmed empirically too: a no-op target (set to the foot's own
+  current position) left the foot exactly in place and bone `.scaling`
+  unchanged at `[1,1,1]`. A corollary: since `ikSpace` deliberately
+  excludes `rootNode`'s Size scaling, the per-frame target/pole
+  computation must **not** multiply the baseline offset by `sizeValue` —
+  Size is scale-invariant for this solve (same triangle, rendered bigger
+  later), and double-counting it was confirmed to push the target past
+  what the (correctly Size-independent) measured bone lengths could reach,
+  dipping the foot below ground specifically at combined extreme leg-length
+  + Size values.
+  `updateLegIK(controller, ikSpace, hipBone, baselineSample)` is the
+  per-frame solve: reads the *current* hip position (reflecting any
+  Hips-region edits), adds the baseline offset, sets
+  `targetPosition`/`poleTargetPosition`, calls `.update()`. Wired into
+  `main.ts`'s `onBeforeRenderObservable`, same hook `stopOrphanedAnimatables`
+  already runs in, after a `syncBonesFromLinkedTransformNodes` call.
+  `BoneIKController` measures both bone lengths once at construction and
+  never refreshes them, so `main.ts`'s `rebuildLegIKChains` reconstructs
+  (not mutates) both leg controllers — after a `syncBonesFromLinkedTransformNodes`
+  call, so the measurement reflects whatever body-shape edit just
+  happened — whenever a body-shape slider changes or Reset runs.
+  Ankle/foot rotation is left untouched (position-only correction) — this
+  was confirmed sufficient visually through a full gait cycle, so no
+  explicit ankle-orientation correction was added.
+  `bakeLegIKIntoAnimations(group, skeleton, ikSpace, legs, frameStep)`
+  exists because `GLTF2Export.GLBAsync` only ever serializes each
+  `Animation`'s existing authored keyframes — confirmed by reading
+  `glTFAnimation.js` down to `Animation._interpolate`, it never samples
+  live scene/bone state — so the per-frame IK correction above would
+  silently vanish from any exported GLB without an explicit bake step. It
+  samples every `frameStep` across a clip's full range (called with `1`,
+  i.e. every integer frame), evaluates the live IK solve at each sampled
+  frame, and replaces the hip/knee `rotationQuaternion` channels' keys via
+  `Animation.setKeys` — the same primitive the exporter itself uses
+  internally — returning a restore closure that puts the original keys
+  back. This bakes in-place on the same live `Animation` objects the
+  running app uses for playback, so `main.ts`'s `handleExport` calls it for
+  *every* loaded clip (the manifest lists all of them, not just the one
+  currently selected) inside a `try`/`finally`, restoring original keys and
+  the visible clip's exact frame afterward regardless of whether export
+  succeeds — confirmed the live app is left completely undisturbed by
+  exporting (customization and playback both continue exactly as before).
 - `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
   animations) and `E` (toggle helmet) listeners, and call into `core/`.
@@ -456,45 +442,37 @@ second consumer exists yet to justify one):
   once at load as the "1.0" baseline, then sets `rootNode.scaling =
   baseline.scale(sliderValue)` on input — equipment scales proportionally for
   free (see `loadEquipment`/`loadProp` above). Body Shape: a "Body Shape"
-  section with a slider row for each of 18 bone groups (bone names, tab
-  assignment, optional `parentLabel` for hierarchy compensation, and
-  optional `uniformOnly` all defined in `main.ts` as `BODY_PART_CONFIG` —
+  section with a single Length slider per bone group (Width was removed
+  rig-wide in the translation-based rewrite — see `bodyShape.ts` above —
+  so there's no longer a length-vs-width distinction for the UI to have an
+  opinion about) — 18 groups, each defined in `main.ts`'s
+  `BODY_PART_CONFIG` as either `lengthBones: string[]` (the current,
+  translation-based mechanism — child nodes whose rest translation *is*
+  this label's length, one or more of them: a single child for a simple
+  bone, several for a fan-out control like Hips/Hand, several chained ones
+  for a multi-segment control like Spine/Fingers) or `bones: string[]`
+  (the `scaleBodyPart` fallback, permanently for the one leaf bone with no
+  translation target — Lower Foot — width pinned to `1`). Bone names are
   Shell's concern, not Core's, same as equipment bone names like
-  `"mixamorig:RightHand"` — see `bodyShape.ts` above for the compensation
-  mechanism, which pairs are `uniformOnly`, and which are deliberately left
-  uncompensated) — a single "Size" slider for `uniformOnly` groups,
-  separate Length + Width for everything else (`ui.ts`'s `BodyPartOptions.
-  uniformOnly` flag, read in `createControlPanel`'s per-part render loop;
-  same `createLabeledSlider` helper either way, just one call instead of
-  two), split across 6 tabs (Legs, Foot, Arms, Hand, Fingers, Torso) in
-  `ui.ts` — one
-  tab-button row plus one show/hide container per tab, tab order fixed by
-  `BODY_SHAPE_TAB_ORDER` independent of `BODY_PART_CONFIG`'s own key order
-  (which is instead ordered so a compensated group's `parentLabel` is
-  always defined earlier, so `resetAll`'s single reset pass computes each
-  group's compensation against an already-reset parent). `HeadTop_End`
-  (child of `Head`) was deliberately not added as a control: checking both
-  meshes' `JOINTS_0`/`WEIGHTS_0` vertex attributes found zero vertices
-  bound to it, so a slider there would be a visual no-op. `applyBodyPart`
-  calls `scaleBodyPart` only when a slider actually changes (see
-  `bodyShape.ts` above for why it no longer needs to run every frame);
-  slider callbacks go through a
-  `setBodyPart` wrapper that reapplies every group, not just the changed
-  one, before measuring the ground-height compensation delta (see
-  `bodyShape.ts` above) — needed once hierarchy compensation chains run
-  several levels deep (e.g. Head depends on Neck depends on Spine), since
-  leaving a dependent group stale would measure the ground-height delta
-  against a not-yet-settled pose. A Reset
-  button (`main.ts`'s `resetAll`) restores Size, every Body Shape slider,
-  equipment, sun, and animation to their load-time defaults in one step —
-  it sets the known-default values directly (`groundOffsetAtSize1 = 0`,
-  Size `1`) rather than routing through
-  `setBodyPart`'s before/after measurement, since that measurement is
-  pose-dependent (accurate for one incremental change, but doesn't cancel
-  exactly when undoing several at once from a different animation pose
-  than they were originally set from — confirmed: resetting from Running
-  left a residual ~0.5 unit offset when going through `setBodyPart`, gone
-  once Reset set the defaults directly instead). `panel.resetControls()`
+  `"mixamorig:RightHand"`. Tabs: split across 6 (Legs, Foot, Arms, Hand,
+  Fingers, Torso) in `ui.ts` — one tab-button row plus one show/hide
+  container per tab, tab order fixed by `BODY_SHAPE_TAB_ORDER` independent
+  of `BODY_PART_CONFIG`'s own key order. `HeadTop_End` (child of `Head`)
+  was deliberately not added as a control: checking both meshes'
+  `JOINTS_0`/`WEIGHTS_0` vertex attributes found zero vertices bound to it,
+  so a slider there would be a visual no-op (it's still used structurally,
+  though, as `Head`'s own `lengthBones` target). `applyBodyPart` calls
+  `translateBodyPart` (or the `scaleBodyPart` fallback) only when a slider
+  actually changes — translation-based length needs no per-frame
+  reapplication, same reasoning as Scale's (see `bodyShape.ts` above);
+  slider callbacks go through a `setBodyPart` wrapper that reapplies every
+  label (simpler than tracking exactly which labels affect which others)
+  and then unconditionally rebuilds both leg IK chains (`legIK.ts`'s
+  `rebuildLegIKChains` — cheap, and simpler than tracking exactly which
+  labels affect leg length). A Reset button (`main.ts`'s `resetAll`)
+  restores Size, every Body Shape slider, equipment, sun, and animation to
+  their load-time defaults in one step, then also rebuilds both leg IK
+  chains. `panel.resetControls()`
   syncs the sliders' visual positions back to 1 without re-triggering
   their input handlers. `main.ts` also triggers
   the actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
