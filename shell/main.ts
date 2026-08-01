@@ -58,17 +58,31 @@ interface BodyPartConfig {
   // from one group to the next (e.g. Upper Leg's length target is LeftLeg,
   // Lower Leg's is LeftFoot -- one level further down the chain each time).
   lengthBones?: string[];
-  // Interim Scale-based fallback for labels not yet converted (Hips, Hand,
-  // Spine, Fingers -- Phase 3) and for Lower Foot permanently (a leaf bone
-  // with no child to carry a translation-based length at all). Width no
-  // longer exists as a control, so this always scales with width pinned to
-  // 1 -- length-only, same single slider as the translation-based labels.
+  // Scale-based fallback, now only for Lower Foot (a leaf bone with no
+  // child to carry a translation-based length at all). Width no longer
+  // exists as a control, so this always scales with width pinned to 1 --
+  // length-only, same single slider as the translation-based labels.
   bones?: string[];
 }
 
 const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
-  Hips: { bones: ["mixamorig:Hips"], tab: "Torso" },
-  Spine: { bones: ["mixamorig:Spine"], tab: "Torso" },
+  // Hips sits at/near the skeleton root -- no single parent-bone
+  // translation represents "Hips length" the way a simple chain does.
+  // Same proportional-children design as Hand below: scale all of Hips'
+  // direct children's rest translations by the same ratio, treating Hips
+  // as the one intentional "resize the whole pelvis area" macro control
+  // (matching its long-standing role), not a single node's own translation.
+  Hips: { lengthBones: ["mixamorig:LeftUpLeg", "mixamorig:RightUpLeg", "mixamorig:Spine"], tab: "Torso" },
+  // Chain control: translation doesn't cascade the way Scale did, so every
+  // segment's length-carrying child is listed explicitly and scaled by the
+  // same ratio, rather than relying on hierarchy inheritance from a single
+  // root-bone entry. Spine -> Spine1 -> Spine2 -> (forks into
+  // Neck/LeftShoulder/RightShoulder, each independently controlled
+  // elsewhere) -- so this only covers the two segments Spine structurally
+  // owns (Spine's own length lives in Spine1's translation, Spine1's in
+  // Spine2's), stopping before the fork to avoid double-editing what
+  // Chest/Neck already control independently.
+  Spine: { lengthBones: ["mixamorig:Spine1", "mixamorig:Spine2"], tab: "Torso" },
   Chest: { lengthBones: ["mixamorig:LeftArm", "mixamorig:RightArm"], tab: "Torso" },
   Neck: { lengthBones: ["mixamorig:Head"], tab: "Torso" },
   Head: { lengthBones: ["mixamorig:HeadTop_End"], tab: "Torso" },
@@ -88,23 +102,87 @@ const BODY_PART_CONFIG: Record<string, BodyPartConfig> = {
   "Upper Arm": { lengthBones: ["mixamorig:LeftForeArm", "mixamorig:RightForeArm"], tab: "Arms" },
   "Lower Arm": { lengthBones: ["mixamorig:LeftHand", "mixamorig:RightHand"], tab: "Arms" },
 
-  // LeftHand/RightHand fan out into 5 children (one per finger) -- no
-  // single child represents "hand length" the way a simple chain does.
-  // Stays interim Scale-based until Phase 3's proportional-children design
-  // (same pattern as Hips).
-  Hand: { bones: ["mixamorig:LeftHand", "mixamorig:RightHand"], tab: "Hand" },
+  // Same proportional-children design as Hips: LeftHand/RightHand fan out
+  // into 5 children (one per finger), no single child represents "hand
+  // length" the way a simple chain does, so all 10 (5 fingers x 2 hands)
+  // first-knuckle translations scale together by the same ratio.
+  Hand: {
+    lengthBones: [
+      "mixamorig:LeftHandIndex1",
+      "mixamorig:LeftHandMiddle1",
+      "mixamorig:LeftHandPinky1",
+      "mixamorig:LeftHandRing1",
+      "mixamorig:LeftHandThumb1",
+      "mixamorig:RightHandIndex1",
+      "mixamorig:RightHandMiddle1",
+      "mixamorig:RightHandPinky1",
+      "mixamorig:RightHandRing1",
+      "mixamorig:RightHandThumb1",
+    ],
+    tab: "Hand",
+  },
 
-  // Interim Scale-based (chain controls, Phase 3): each finger's 4 segments
-  // (…1/2/3/4) are chained bones with near-identity rest-pose rotation
-  // between them, so only the root segment is listed here -- scaling it
-  // cascades cleanly down the whole finger via hierarchy inheritance
-  // instead of compounding by setting the same scale on all 4 segments
-  // independently.
-  Thumb: { bones: ["mixamorig:LeftHandThumb1", "mixamorig:RightHandThumb1"], tab: "Fingers" },
-  Index: { bones: ["mixamorig:LeftHandIndex1", "mixamorig:RightHandIndex1"], tab: "Fingers" },
-  Middle: { bones: ["mixamorig:LeftHandMiddle1", "mixamorig:RightHandMiddle1"], tab: "Fingers" },
-  Ring: { bones: ["mixamorig:LeftHandRing1", "mixamorig:RightHandRing1"], tab: "Fingers" },
-  Pinky: { bones: ["mixamorig:LeftHandPinky1", "mixamorig:RightHandPinky1"], tab: "Fingers" },
+  // Chain controls: each finger's 4 segments (…1/2/3/4) need every
+  // segment's length-carrying child listed explicitly (segment N's own
+  // length lives in segment N+1's translation), covering the first 3
+  // segments' lengths -- the last segment (…4) is a leaf with no child, so
+  // like Lower Foot its own length has no translation target and is left
+  // unaddressed, consistent with how every other leaf segment is handled.
+  Thumb: {
+    lengthBones: [
+      "mixamorig:LeftHandThumb2",
+      "mixamorig:LeftHandThumb3",
+      "mixamorig:LeftHandThumb4",
+      "mixamorig:RightHandThumb2",
+      "mixamorig:RightHandThumb3",
+      "mixamorig:RightHandThumb4",
+    ],
+    tab: "Fingers",
+  },
+  Index: {
+    lengthBones: [
+      "mixamorig:LeftHandIndex2",
+      "mixamorig:LeftHandIndex3",
+      "mixamorig:LeftHandIndex4",
+      "mixamorig:RightHandIndex2",
+      "mixamorig:RightHandIndex3",
+      "mixamorig:RightHandIndex4",
+    ],
+    tab: "Fingers",
+  },
+  Middle: {
+    lengthBones: [
+      "mixamorig:LeftHandMiddle2",
+      "mixamorig:LeftHandMiddle3",
+      "mixamorig:LeftHandMiddle4",
+      "mixamorig:RightHandMiddle2",
+      "mixamorig:RightHandMiddle3",
+      "mixamorig:RightHandMiddle4",
+    ],
+    tab: "Fingers",
+  },
+  Ring: {
+    lengthBones: [
+      "mixamorig:LeftHandRing2",
+      "mixamorig:LeftHandRing3",
+      "mixamorig:LeftHandRing4",
+      "mixamorig:RightHandRing2",
+      "mixamorig:RightHandRing3",
+      "mixamorig:RightHandRing4",
+    ],
+    tab: "Fingers",
+  },
+  Pinky: {
+    lengthBones: [
+      "mixamorig:LeftHandPinky2",
+      "mixamorig:LeftHandPinky3",
+      "mixamorig:LeftHandPinky4",
+      "mixamorig:RightHandPinky2",
+      "mixamorig:RightHandPinky3",
+      "mixamorig:RightHandPinky4",
+    ],
+    tab: "Fingers",
+  },
 };
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
