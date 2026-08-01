@@ -162,6 +162,25 @@ export function createLegIKChain(ikSpace: TransformNode, kneeBone: Bone): BoneIK
   // directly each frame (see updateLegIK) only takes effect when neither
   // poleTargetBone nor poleTargetMesh is set.
   controller.poleTargetBone = null;
+  // bone1's (thigh's) computed world orientation (`mat1` in
+  // BoneIKController.update(), built from target/pole via
+  // Matrix.FromXYZAxesToRef) came out rolled ~90 degrees from correct even
+  // after the bendAxis fix above -- confirmed by comparing the thigh's
+  // rotation quaternion with and without IK active at the same frame: the
+  // pre-IK (authored) and post-IK rotation axes pointed in substantially
+  // different directions, not just a small deviation, and this cascaded
+  // downstream (the shin's, and therefore the untouched/authored foot's,
+  // world orientation is chained through the thigh's frame) -- matching
+  // the reported symptom exactly: one thigh and both feet rotated ~90
+  // degrees. `poleAngle` exists precisely to correct a bend-plane roll
+  // mismatch like this (`update()` applies it as an extra rotation around
+  // the aim axis after building the target-facing orientation). Found
+  // empirically by comparing every multiple of 45 degrees from a fixed
+  // front-on camera angle, paused mid-gait: only -90 degrees produced a
+  // straight, symmetric stance with both legs facing forward; every other
+  // candidate (including the default of 0) visibly splayed the knees
+  // outward to varying degrees.
+  controller.poleAngle = -Math.PI / 2;
   return controller;
 }
 
