@@ -70,6 +70,11 @@ const camera = new ArcRotateCamera(
   scene,
 );
 camera.attachControl(canvas, true);
+// Proportional zoom: each wheel notch changes radius by a percentage of the
+// current radius, rather than wheelPrecision's fixed absolute step -- so
+// steps shrink automatically as the camera gets closer, instead of a single
+// notch overshooting once already zoomed in.
+camera.wheelDeltaPercentage = 0.01;
 
 const ambientLight = new HemisphericLight("ambientLight", new Vector3(0, 1, 0), scene);
 ambientLight.intensity = 0.6;
