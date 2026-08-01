@@ -1,4 +1,13 @@
-import { type AnimationGroup, type Bone, BoneIKController, type Skeleton, type TransformNode, Vector3 } from "@babylonjs/core";
+import {
+  type Animation,
+  type AnimationGroup,
+  type Bone,
+  BoneIKController,
+  type IAnimationKey,
+  type Skeleton,
+  type TransformNode,
+  Vector3,
+} from "@babylonjs/core";
 
 export interface LegBaselineSample {
   frame: number;
@@ -170,4 +179,101 @@ export function updateLegIK(
   controller.targetPosition = hipPos.add(baselineSample.ankleOffset);
   controller.poleTargetPosition = hipPos.add(baselineSample.kneeOffset);
   controller.update();
+}
+
+export interface LegIKBakeTarget {
+  hipBone: Bone;
+  kneeBone: Bone;
+  controller: BoneIKController;
+  baseline: LegBaselineSample[];
+}
+
+function findRotationAnimation(group: AnimationGroup, node: TransformNode): Animation | undefined {
+  return group.targetedAnimations.find(
+    (ta) => ta.target === node && ta.animation.targetProperty === "rotationQuaternion",
+  )?.animation;
+}
+
+// GLTF2Export only ever serializes each Animation's existing authored
+// keyframes (confirmed by reading glTFAnimation.js down to
+// Animation._interpolate: it never samples live scene/bone state) -- so
+// per-frame IK correction, applied only at render time via
+// onBeforeRenderObservable, would silently vanish from any exported GLB
+// without this. Bakes the IK-corrected hip/knee rotation into the group's
+// own rotationQuaternion channels by sampling at `frameStep` intervals
+// across the clip's full range, evaluating the IK solve at each sampled
+// frame against the baseline (not live playback), and replacing each
+// channel's keys via Animation.setKeys -- the same primitive the exporter
+// itself uses internally. Ankle/foot rotation is untouched (Phase 4 kept
+// ankle correction position-only), so only hip and knee channels bake.
+//
+// Runs in-place on the same live Animation objects the running app uses
+// for playback, so the caller MUST invoke the returned restore function
+// (putting the original, pre-bake keys back) once export finishes --
+// otherwise live playback would be left running against a now-static
+// baked curve instead of per-frame IK.
+export function bakeLegIKIntoAnimations(
+  group: AnimationGroup,
+  skeleton: Skeleton,
+  ikSpace: TransformNode,
+  legs: LegIKBakeTarget[],
+  frameStep: number,
+): () => void {
+  const channelsByBone = legs.map((leg) => {
+    const hipNode = leg.hipBone.getTransformNode();
+    const kneeNode = leg.kneeBone.getTransformNode();
+    if (!hipNode || !kneeNode) {
+      throw new Error("Leg bone has no linked transform node");
+    }
+    return {
+      leg,
+      hipNode,
+      kneeNode,
+      hipAnimation: findRotationAnimation(group, hipNode),
+      kneeAnimation: findRotationAnimation(group, kneeNode),
+    };
+  });
+
+  const sampledKeys = new Map<Animation, IAnimationKey[]>();
+  for (const { hipAnimation, kneeAnimation } of channelsByBone) {
+    if (hipAnimation) {
+      sampledKeys.set(hipAnimation, []);
+    }
+    if (kneeAnimation) {
+      sampledKeys.set(kneeAnimation, []);
+    }
+  }
+
+  const frames: number[] = [];
+  for (let f = group.from; f < group.to; f += frameStep) {
+    frames.push(f);
+  }
+  frames.push(group.to);
+
+  for (const frame of frames) {
+    group.goToFrame(frame);
+    syncBonesFromLinkedTransformNodes(skeleton);
+    for (const { leg, hipNode, kneeNode, hipAnimation, kneeAnimation } of channelsByBone) {
+      const sample = sampleLegBaseline(leg.baseline, frame);
+      updateLegIK(leg.controller, ikSpace, leg.hipBone, sample);
+      if (hipAnimation && hipNode.rotationQuaternion) {
+        sampledKeys.get(hipAnimation)?.push({ frame, value: hipNode.rotationQuaternion.clone() });
+      }
+      if (kneeAnimation && kneeNode.rotationQuaternion) {
+        sampledKeys.get(kneeAnimation)?.push({ frame, value: kneeNode.rotationQuaternion.clone() });
+      }
+    }
+  }
+
+  const backups: Array<{ animation: Animation; originalKeys: IAnimationKey[] }> = [];
+  for (const [animation, newKeys] of sampledKeys) {
+    backups.push({ animation, originalKeys: animation.getKeys() });
+    animation.setKeys(newKeys);
+  }
+
+  return () => {
+    for (const { animation, originalKeys } of backups) {
+      animation.setKeys(originalKeys);
+    }
+  };
 }
