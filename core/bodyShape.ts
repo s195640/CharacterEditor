@@ -1,4 +1,4 @@
-import type { Skeleton, TransformNode } from "@babylonjs/core";
+import { type Skeleton, type TransformNode, Vector3 } from "@babylonjs/core";
 
 export function getBoneNode(skeleton: Skeleton, boneName: string): TransformNode {
   const bone = skeleton.bones.find((b) => b.name === boneName);
@@ -27,5 +27,41 @@ export function scaleBodyPart(
 ): void {
   for (const boneName of boneNames) {
     getBoneNode(skeleton, boneName).scaling.set(width, length, width);
+  }
+}
+
+// Captures each bone's own rest-pose local translation, once, before any
+// body-shape editing happens. translateBodyPart needs this as its baseline:
+// unlike scaleBodyPart (which always multiplies from a universal (1,1,1)
+// identity), a bone's "length" via translation is the bone's own authored
+// offset from its parent (e.g. mixamorig:LeftLeg's translation.y is the
+// knee-to-hip distance) -- there's no universal starting point to assume, so
+// it has to be read once per bone and reused as the fixed reference for
+// every subsequent length ratio.
+export function captureRestTranslations(
+  skeleton: Skeleton,
+  boneNames: string[],
+): Record<string, Vector3> {
+  return Object.fromEntries(
+    boneNames.map((boneName) => [boneName, getBoneNode(skeleton, boneName).position.clone()]),
+  );
+}
+
+// Reshapes a body part's length via rest-pose translation instead of Scale:
+// sets each named bone's local position.y to its captured rest translation's
+// Y scaled by `length`, leaving X/Z untouched. Y is the bone-length axis, per
+// the same rig-wide convention scaleBodyPart already relies on. Unlike
+// Scale-based length, this composes correctly through a rotated child joint
+// with no shear to compensate for -- translation isn't reinterpreted through
+// the child's own rotation the way a non-uniform parent scale is.
+export function translateBodyPart(
+  skeleton: Skeleton,
+  boneNames: string[],
+  restTranslations: Record<string, Vector3>,
+  length: number,
+): void {
+  for (const boneName of boneNames) {
+    const rest = restTranslations[boneName];
+    getBoneNode(skeleton, boneName).position.set(rest.x, rest.y * length, rest.z);
   }
 }

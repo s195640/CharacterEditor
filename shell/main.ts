@@ -17,10 +17,11 @@ import {
   loadEquipment,
   loadProp,
   stopOrphanedAnimatables,
+  stripPositionAnimations,
   stripScaleAnimations,
 } from "../core/characterLoader";
 import { AnimationController } from "../core/animationController";
-import { getBoneNode, scaleBodyPart } from "../core/bodyShape";
+import { captureRestTranslations, getBoneNode, scaleBodyPart, translateBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
 import { createControlPanel } from "./ui";
 
@@ -220,6 +221,33 @@ async function main() {
     await loadAnimationClip(scene, "/characters/", file);
   }
   stripScaleAnimations(scene);
+  // Spike (0.6.22): prove translation-based bone length on Lower Leg only,
+  // see docs/other/PLAN_translation_based_body_shape.MD. A bone's visual
+  // length (the segment from its own joint to its child's joint) is stored
+  // in its CHILD's translation, not its own -- confirmed by parsing
+  // Walking.glb's raw node data: mixamorig:LeftLeg's translation.y (40.6)
+  // is actually the THIGH's length (Upper Leg), and mixamorig:LeftFoot's
+  // translation.y (42.1) is the SHIN's length (Lower Leg, the bone this
+  // spike targets) -- the opposite of scaleBodyPart's convention, where
+  // scaling a bone's OWN scale is what stretches its own segment. So
+  // "Lower Leg" length is edited via LeftFoot/RightFoot's translation, not
+  // LeftLeg/RightLeg's (which stays Scale-based here for Width, since that
+  // still directly stretches the shin's own weighted geometry).
+  const LOWER_LEG_LENGTH_BONES = ["mixamorig:LeftFoot", "mixamorig:RightFoot"];
+  // LeftFoot/RightFoot's translation channel is a baked-constant dead
+  // weight, same pattern as the scale=1 channel stripScaleAnimations
+  // already handles (confirmed by parsing Walking.glb's raw keyframe data:
+  // 2 identical keys), but unlike scale this can't be stripped rig-wide --
+  // Hips carries genuine root motion in its own translation channel -- so
+  // this only targets the specific bones about to be edited via rest
+  // translation.
+  stripPositionAnimations(scene, LOWER_LEG_LENGTH_BONES);
+  // Captured once, before any body-shape edit -- translateBodyPart's fixed
+  // reference point for every subsequent Lower Leg length ratio.
+  const lowerLegRestTranslations = captureRestTranslations(
+    character.skeletons[0],
+    LOWER_LEG_LENGTH_BONES,
+  );
 
   const animationController = new AnimationController(scene.animationGroups);
   animationController.play();
@@ -297,6 +325,21 @@ async function main() {
       const parentState = bodyPartState[config.parentLabel];
       length /= parentState.length;
       width /= parentState.width;
+    }
+    // Spike (0.6.22): Lower Leg's length goes through rest-pose translation
+    // instead of Scale (see docs/other/PLAN_translation_based_body_shape.MD).
+    // Width stays Scale-based for now -- Phase 2 removes Width entirely --
+    // so Scale's own length factor is pinned to 1 here to avoid double-
+    // applying length on top of the translation edit.
+    if (label === "Lower Leg") {
+      translateBodyPart(
+        character.skeletons[0],
+        LOWER_LEG_LENGTH_BONES,
+        lowerLegRestTranslations,
+        length,
+      );
+      scaleBodyPart(character.skeletons[0], config.bones, 1, width);
+      return;
     }
     scaleBodyPart(character.skeletons[0], config.bones, length, width);
   };
