@@ -1,0 +1,173 @@
+import { type AnimationGroup, type Bone, BoneIKController, type Skeleton, type TransformNode, Vector3 } from "@babylonjs/core";
+
+export interface LegBaselineSample {
+  frame: number;
+  // Position relative to the hip (the IK chain's anchor bone), captured at
+  // the character's default (unedited) body-shape proportions -- the fixed
+  // reference every subsequent leg-length customization gets IK-solved
+  // against, regardless of which clip is later selected for playback (the
+  // specific case a root-offset hack sampled against one clip couldn't fix).
+  ankleOffset: Vector3;
+  // BoneIKController needs a pole target to know which way to bend the
+  // knee -- otherwise it has no way to distinguish "knee forward" from
+  // "knee backward" for a given target distance. Using the authored
+  // animation's own knee position (relative to the same hip anchor)
+  // reproduces the original bend direction exactly, rather than inventing
+  // a synthetic offset.
+  kneeOffset: Vector3;
+}
+
+// A bone with a linked TransformNode (this project's rig convention, see
+// characterLoader.ts) only gets its own position/rotation/scaling synced
+// FROM that node during Skeleton.prepare(), which Babylon calls later in
+// the frame (during mesh rendering) than onBeforeRenderObservable -- so a
+// Bone-level read at that point (which is what BoneIKController and
+// Bone.getAbsolutePosition rely on) would see last frame's stale pose, not
+// this frame's already-evaluated animation. Confirmed by reading
+// Skeleton.prepare()'s own source: its bone-sync loop is exactly this,
+// paired with computing skin matrices immediately afterward and marking
+// the frame's render ID as handled -- calling prepare() itself here would
+// freeze in the PRE-IK pose for this frame's actual render, since Babylon's
+// own later prepare() call would then see the render ID already matches
+// and skip re-running. This replicates just the sync half, leaving skin
+// matrix computation to Babylon's own later call (by then using our
+// IK-corrected rotations).
+export function syncBonesFromLinkedTransformNodes(skeleton: Skeleton): void {
+  for (const bone of skeleton.bones) {
+    const node = bone.getTransformNode();
+    if (!node) {
+      continue;
+    }
+    bone.position = node.position;
+    if (node.rotationQuaternion) {
+      bone.rotationQuaternion = node.rotationQuaternion;
+    } else {
+      bone.rotation = node.rotation;
+    }
+    bone.scaling = node.scaling;
+  }
+  skeleton.computeAbsoluteMatrices(true);
+}
+
+// Samples a clip's full frame range once, before any body-shape edit is
+// ever applied, recording where the authored animation puts the ankle and
+// knee relative to the hip at each sampled frame. Called once per clip at
+// load time; scrubbing the clip here is harmless since nothing has started
+// playing yet -- except AnimationGroup.goToFrame is itself a no-op until
+// the group has been started at least once (`if (!this._isStarted) return
+// this;`, confirmed by reading animationGroup.pure.js directly), so this
+// must start the group first, even though nothing should visibly play
+// during setup (the caller's own AnimationController.play() stops every
+// group before starting the one it actually wants, right after this runs).
+//
+// Reads positions via Bone.getAbsolutePosition(ikSpace), not the linked
+// TransformNodes' own getAbsolutePosition() -- see ikSpace's own doc
+// comment in main.ts for why: this rig's scene-graph root carries a
+// mirrored ([1,1,-1]) scale, and bridging bone-space through the REAL
+// (mirrored) character mesh corrupts BoneIKController's world-space
+// rotation math (confirmed empirically: a bone's .scaling was found
+// jumping to ~100x, the exact inverse of the rig's import-scale factor,
+// after a single .update() call). Bridging through an inert,
+// identity-transform reference node instead sidesteps the mirrored
+// determinant entirely, since every position then lives in the same
+// consistent (raw, unscaled) skeleton-space -- confirmed empirically too:
+// a no-op IK target (set to the foot's own current position) left the
+// foot exactly where it started, and bone .scaling stayed exactly [1,1,1].
+// goToFrame only updates the animation's TARGET nodes directly; bone-level
+// state needs syncBonesFromLinkedTransformNodes after each scrub to catch
+// up before reading it.
+export function captureLegBaseline(
+  group: AnimationGroup,
+  skeleton: Skeleton,
+  ikSpace: TransformNode,
+  hipBone: Bone,
+  kneeBone: Bone,
+  ankleBone: Bone,
+  sampleCount: number,
+): LegBaselineSample[] {
+  group.play(false);
+  const samples: LegBaselineSample[] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const frame = group.from + ((group.to - group.from) * i) / (sampleCount - 1);
+    group.goToFrame(frame);
+    syncBonesFromLinkedTransformNodes(skeleton);
+    const hipPos = hipBone.getAbsolutePosition(ikSpace);
+    samples.push({
+      frame,
+      ankleOffset: ankleBone.getAbsolutePosition(ikSpace).subtract(hipPos),
+      kneeOffset: kneeBone.getAbsolutePosition(ikSpace).subtract(hipPos),
+    });
+  }
+  return samples;
+}
+
+// Baseline is only ever sampled at discrete points, but live playback frame
+// is continuous -- linearly interpolate between the two bracketing samples.
+export function sampleLegBaseline(
+  samples: LegBaselineSample[],
+  frame: number,
+): { ankleOffset: Vector3; kneeOffset: Vector3 } {
+  const clamped = Math.max(samples[0].frame, Math.min(samples[samples.length - 1].frame, frame));
+  let i = 0;
+  while (i < samples.length - 2 && samples[i + 1].frame < clamped) {
+    i++;
+  }
+  const a = samples[i];
+  const b = samples[i + 1];
+  const t = b.frame === a.frame ? 0 : (clamped - a.frame) / (b.frame - a.frame);
+  return {
+    ankleOffset: Vector3.Lerp(a.ankleOffset, b.ankleOffset, t),
+    kneeOffset: Vector3.Lerp(a.kneeOffset, b.kneeOffset, t),
+  };
+}
+
+// BoneIKController measures both bone lengths ONCE at construction (from
+// the live bone positions at that moment) and never refreshes them, so it
+// must be rebuilt -- not just reused -- whenever a leg's translation-based
+// length changes. Cheap: just needs bone references and a fresh position
+// read, done via syncBonesFromLinkedTransformNodes before constructing so
+// the measurement reflects whatever body-shape edit just happened, not a
+// stale pre-edit pose. `ikSpace` (not the real character mesh) is passed
+// as the required `mesh` constructor argument -- see the module doc above.
+export function createLegIKChain(ikSpace: TransformNode, kneeBone: Bone): BoneIKController {
+  const controller = new BoneIKController(ikSpace, kneeBone, {});
+  // Override the constructor's default pole target (bone1's parent, i.e.
+  // Hips) -- that tracks the LIVE hip bone's orientation, not the authored
+  // animation's own knee-bend direction at a given frame, which is what
+  // the baseline capture above is actually for. Setting poleTargetPosition
+  // directly each frame (see updateLegIK) only takes effect when neither
+  // poleTargetBone nor poleTargetMesh is set.
+  controller.poleTargetBone = null;
+  return controller;
+}
+
+// Per-frame solve: target/pole positions are the current hip position plus
+// the baseline offset at this frame -- deliberately NOT scaled by the
+// character's overall Size, and NOT scaled by leg-length ratios either.
+// Size is scale-invariant for this solve: ikSpace is an unparented,
+// identity-transform node, so it deliberately excludes rootNode's Size
+// scaling entirely -- every position here already lives in one consistent,
+// Size-independent skeleton-space, the same space bone lengths are
+// measured in. The IK solve is a pure angle problem in that space (same
+// triangle shape regardless of how large Size later renders it), so
+// introducing Size here at all would double-count it -- confirmed
+// empirically: multiplying the baseline offset by sizeValue caused the
+// foot to dip below the ground at combined extreme Upper Leg + Size
+// values, since the target distance grew past what the (correctly
+// Size-independent) measured bone lengths could reach, clamping the reach
+// short of the intended target. Leg-length ratios likewise don't need
+// reintroducing here -- BoneIKController measures the CURRENT (possibly
+// customized) bone lengths itself at construction, and bending a
+// customized-length leg to reach the fixed baseline target is exactly
+// what IK is for.
+export function updateLegIK(
+  controller: BoneIKController,
+  ikSpace: TransformNode,
+  hipBone: Bone,
+  baselineSample: { ankleOffset: Vector3; kneeOffset: Vector3 },
+): void {
+  const hipPos = hipBone.getAbsolutePosition(ikSpace);
+  controller.targetPosition = hipPos.add(baselineSample.ankleOffset);
+  controller.poleTargetPosition = hipPos.add(baselineSample.kneeOffset);
+  controller.update();
+}
