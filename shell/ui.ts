@@ -38,10 +38,14 @@ export interface ControlPanel {
   resetControls(): void;
 }
 
+function formatSliderPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
 function createLabeledSlider(
   labelText: string,
   onInput: (value: number) => void,
-): { row: HTMLElement; slider: HTMLInputElement } {
+): { row: HTMLElement; slider: HTMLInputElement; refreshValueDisplay: () => void } {
   const row = document.createElement("div");
   row.className = "slider-row";
 
@@ -55,10 +59,27 @@ function createLabeledSlider(
   slider.max = "2";
   slider.step = "0.1";
   slider.value = "1";
-  slider.addEventListener("input", () => onInput(Number(slider.value)));
   row.appendChild(slider);
 
-  return { row, slider };
+  const valueDisplay = document.createElement("span");
+  valueDisplay.className = "slider-value";
+  row.appendChild(valueDisplay);
+
+  // Slider values also get set directly (not via user input) on Reset, so
+  // the display needs its own refresh entry point rather than only
+  // updating from the "input" event -- a direct .value assignment doesn't
+  // fire that event.
+  const refreshValueDisplay = () => {
+    valueDisplay.textContent = formatSliderPercent(Number(slider.value));
+  };
+  refreshValueDisplay();
+
+  slider.addEventListener("input", () => {
+    refreshValueDisplay();
+    onInput(Number(slider.value));
+  });
+
+  return { row, slider, refreshValueDisplay };
 }
 
 export function createControlPanel(options: ControlPanelOptions): ControlPanel {
@@ -150,7 +171,7 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
 
   const tabButtons = new Map<string, HTMLButtonElement>();
   const tabContainers = new Map<string, HTMLElement>();
-  const bodyPartSliders: { length: HTMLInputElement; width: HTMLInputElement }[] = [];
+  const bodyPartSliders: ReturnType<typeof createLabeledSlider>[] = [];
 
   const setActiveTab = (tab: string): void => {
     for (const [name, button] of tabButtons) {
@@ -182,7 +203,7 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
       const widthSlider = createLabeledSlider("Width", part.onWidthChange);
       container.appendChild(lengthSlider.row);
       container.appendChild(widthSlider.row);
-      bodyPartSliders.push({ length: lengthSlider.slider, width: widthSlider.slider });
+      bodyPartSliders.push(lengthSlider, widthSlider);
     }
   }
 
@@ -238,9 +259,10 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   const resetControls = (): void => {
     sizeSlider.value = "1";
     speedSlider.slider.value = "1";
-    for (const sliders of bodyPartSliders) {
-      sliders.length.value = "1";
-      sliders.width.value = "1";
+    speedSlider.refreshValueDisplay();
+    for (const slider of bodyPartSliders) {
+      slider.slider.value = "1";
+      slider.refreshValueDisplay();
     }
   };
 
