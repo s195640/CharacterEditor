@@ -16,6 +16,9 @@ export interface BodyPartOptions {
 const BODY_SHAPE_TAB_ORDER = ["Legs", "Foot", "Arms", "Hand", "Fingers", "Torso"];
 
 export interface ControlPanelOptions {
+  models: string[];
+  activeModel: string;
+  onSelectModel: (label: string) => void;
   animationNames: string[];
   onSelectAnimation: (name: string) => void;
   equipmentItems: EquipmentItemOptions[];
@@ -35,6 +38,7 @@ export interface ControlPanel {
   setPauseState(paused: boolean): void;
   setFrameNumber(frame: number): void;
   resetControls(): void;
+  dispose(): void;
 }
 
 function formatSliderPercent(value: number): string {
@@ -89,6 +93,20 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
   resetButton.textContent = "Reset";
   resetButton.addEventListener("click", () => options.onReset());
   panel.appendChild(resetButton);
+
+  const modelHeading = document.createElement("h2");
+  modelHeading.textContent = "Model";
+  panel.appendChild(modelHeading);
+
+  const modelButtons = new Map<string, HTMLButtonElement>();
+  for (const label of options.models) {
+    const button = document.createElement("button");
+    button.textContent = label;
+    button.classList.toggle("active", label === options.activeModel);
+    button.addEventListener("click", () => options.onSelectModel(label));
+    panel.appendChild(button);
+    modelButtons.set(label, button);
+  }
 
   const animationsHeading = document.createElement("h2");
   animationsHeading.textContent = "Animations";
@@ -263,5 +281,9 @@ export function createControlPanel(options: ControlPanelOptions): ControlPanel {
     }
   };
 
-  return { setEquipmentState, setSunState, setPauseState, setFrameNumber, resetControls };
+  const dispose = (): void => {
+    panel.remove();
+  };
+
+  return { setEquipmentState, setSunState, setPauseState, setFrameNumber, resetControls, dispose };
 }
