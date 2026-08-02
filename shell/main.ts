@@ -418,11 +418,18 @@ async function main() {
     stopOrphanedAnimatables(scene);
     panel.setFrameNumber(animationController.getCurrentFrame());
 
-    // Only actually apply ground correction when the leg chain is
-    // customized. With nothing customized, the foot is already exactly
-    // where the authored animation puts it -- there's nothing to correct,
-    // and rootNode.position.y stays at baseRootY untouched (see
-    // resetAll/setSize, which are the only other things that ever move it).
+    // Only actually solve the ground-offset correction when the leg chain
+    // is customized -- with nothing customized, the foot is already
+    // exactly where the authored animation puts it, so there's nothing to
+    // correct. But rootNode.position.y must still be reset to baseRootY
+    // every frame in the "not customized" branch too, not left alone:
+    // once a customization is reverted (slider dragged back to 100%, not
+    // just via Reset), this observable simply stops calling
+    // applyGroundOffset, and without an explicit reset here the LAST
+    // applied offset stays frozen on rootNode.position.y forever --
+    // confirmed as the reported bug (leg length back to 100% left the
+    // character floating above the ground at whatever offset was last
+    // computed while it WAS customized).
     if (legsAreCustomized()) {
       const group = animationController.getCurrentGroup();
       const baseline = group ? footHeightBaselines.get(group) : undefined;
@@ -437,6 +444,8 @@ async function main() {
           sizeValue,
         );
       }
+    } else {
+      character.rootNode.position.y = baseRootY;
     }
   });
 
