@@ -253,8 +253,9 @@ second consumer exists yet to justify one):
   unrounded readout would show a confusing near-integer instead of the
   actual keyframe number. `getCurrentGroup()` exposes the raw selected
   `AnimationGroup` for callers needing lower-level access than the wrapper
-  methods provide — used by `legIK.ts`'s per-frame solve, which needs the
-  precise unrounded frame to sample the baseline (see `legIK.ts` below)),
+  methods provide — used by `legGroundOffset.ts`'s per-frame correction,
+  which needs the precise unrounded frame to sample the baseline (see
+  `legGroundOffset.ts` below)),
   `bodyShape.ts`
   (`getBoneNode(skeleton, name)` —
   shared lookup, throws if the bone or its linked `TransformNode` is missing;
@@ -317,101 +318,96 @@ second consumer exists yet to justify one):
   Operates on Babylon `Scene`/`AnimationGroup` objects (the rendering engine is
   a locked architectural decision, not "app UI") but has no DOM/UI-panel code
   and no assumptions about how it's hosted.
-- `core/legIK.ts` — real per-frame two-bone IK foot-locking on the leg → foot
-  chain, using Babylon's built-in `BoneIKController` rather than hand-rolled
-  law-of-cosines (reuses a shipped, tested solver). Replaces an earlier
-  scalar root-offset system entirely (see `LEG_BODY_SHAPE_MATH.md` for that
-  system's own history) — that approach sampled foot-height delta against
-  whichever clip was selected when a slider moved, so it silently broke the
-  moment the user switched to a different animation afterward; real IK
-  fixes this by solving fresh against a per-clip baseline every frame,
-  regardless of which clip is currently playing.
-  `captureLegBaseline(group, skeleton, ikSpace, hipBone, kneeBone, ankleBone,
+- `core/legGroundOffset.ts` — continuous per-frame ground-height correction
+  for the leg → foot chain. **Not IK** — an earlier version of this module
+  (`legIK.ts`, `0.6.25`–`0.6.30`) used Babylon's `BoneIKController` to bend
+  the knee so the foot reached a fixed target position, but that turned out
+  to be the wrong mapping entirely: since the fixed IK target never moved
+  regardless of leg length, lengthening a leg only ever changed the knee's
+  bend angle, never the character's height, and the calibration this
+  required (`bendAxis`, `poleAngle` — see history below) broke down into a
+  visible sideways lean at proportions far from what was tuned. Removed
+  entirely and replaced with this module, which never touches rotation:
+  lengthening a leg (translation-based, see `bodyShape.ts` above) naturally
+  pushes the foot further from the hip in whatever direction that segment
+  already points, since nothing is fighting the animation's own rotation —
+  this module's whole job is to measure how far that pushed the foot away
+  from its default-proportions ground height, per frame, and shift the
+  *entire character* vertically to compensate, so the character reads as
+  taller with the foot still planted, instead of the foot itself moving
+  (or the knee re-bending to fake it).
+  `captureFootHeightBaseline(group, leftFootNode, rightFootNode, baseRootY,
   sampleCount)` samples a clip's full frame range once, right after load
-  and before any body-shape edit, recording the ankle's and knee's position
-  *relative to the hip* at each sampled frame — the fixed anatomical target
-  every subsequent leg-length customization gets solved against, independent
-  of proportions. **`AnimationGroup.goToFrame` is a no-op until the group
-  has been started at least once** (confirmed by reading
-  `animationGroup.pure.js`: `if (!this._isStarted) return this;`) — baseline
-  capture originally ran before `AnimationController.play()` had started
-  any group, so every scrub silently did nothing; fixed by having
-  `captureLegBaseline` call `group.play(false)` before scrubbing.
-  `sampleLegBaseline(samples, frame)` linearly interpolates between the two
-  bracketing samples for a live (continuous) playback frame.
-  `syncBonesFromLinkedTransformNodes(skeleton)` replicates just the
-  bone-sync half of `Skeleton.prepare()` (copy `.position`/
-  `.rotationQuaternion`/`.scaling` from each bone's linked `TransformNode`,
-  then `computeAbsoluteMatrices(true)`) without its skin-matrix-computation
-  half — needed because `prepare()` itself doesn't run until later in the
-  frame (during mesh rendering) than `onBeforeRenderObservable`, so a
-  Bone-level read at that point would see last frame's stale pose; calling
-  the *real* `prepare()` here would also freeze in the pre-IK pose for that
-  frame's render, since Babylon's own later `prepare()` call would then see
-  the render ID already matches and skip re-running.
-  `createLegIKChain(ikSpace, kneeBone)` constructs a `BoneIKController`
-  (bone1/thigh is auto-inferred as the knee bone's parent), overriding its
-  default pole-target-tracks-Hips behavior (`poleTargetBone = null`) so the
-  per-frame solve's own baseline-derived pole target takes effect instead.
-  **`ikSpace`** is the single most important, least obvious piece of this
-  module: an inert, never-parented, identity-transform `TransformNode`,
-  created solely to satisfy `BoneIKController`'s non-nullable `mesh`
-  constructor argument — deliberately *not* the real character mesh. This
-  rig's scene-graph root (`__root__`, above the `Armature` node that
-  carries the actual ~0.01 import scale) has a mirrored `[1,1,-1]` scale, a
-  Blender FBX→glTF conversion artifact. Bridging `BoneIKController`'s
-  world-space rotation math through the real, mirrored mesh corrupts it:
-  confirmed empirically that a single `controller.update()` call left a
-  bone's `.scaling` at `~100` — the exact inverse of the rig's import
-  scale — instead of its correct `1`, collapsing the whole leg into the
-  hip; root-caused by reading `Bone._rotateWithMatrix`'s source, whose
-  world-space path round-trips a `parentScale`/`parentScaleInv` derived
-  from the bridging node's world matrix, and silently fails to cancel back
-  to the original scale when that matrix has a mirrored (negative-
-  determinant) component. Bridging through `ikSpace` instead sidesteps the
-  mirrored determinant entirely, since it carries no scale or mirror at
-  all — confirmed empirically too: a no-op target (set to the foot's own
-  current position) left the foot exactly in place and bone `.scaling`
-  unchanged at `[1,1,1]`. A corollary: since `ikSpace` deliberately
-  excludes `rootNode`'s Size scaling, the per-frame target/pole
-  computation must **not** multiply the baseline offset by `sizeValue` —
-  Size is scale-invariant for this solve (same triangle, rendered bigger
-  later), and double-counting it was confirmed to push the target past
-  what the (correctly Size-independent) measured bone lengths could reach,
-  dipping the foot below ground specifically at combined extreme leg-length
-  + Size values.
-  `updateLegIK(controller, ikSpace, hipBone, baselineSample)` is the
-  per-frame solve: reads the *current* hip position (reflecting any
-  Hips-region edits), adds the baseline offset, sets
-  `targetPosition`/`poleTargetPosition`, calls `.update()`. Wired into
-  `main.ts`'s `onBeforeRenderObservable`, same hook `stopOrphanedAnimatables`
-  already runs in, after a `syncBonesFromLinkedTransformNodes` call.
-  `BoneIKController` measures both bone lengths once at construction and
-  never refreshes them, so `main.ts`'s `rebuildLegIKChains` reconstructs
-  (not mutates) both leg controllers — after a `syncBonesFromLinkedTransformNodes`
-  call, so the measurement reflects whatever body-shape edit just
-  happened — whenever a body-shape slider changes or Reset runs.
-  Ankle/foot rotation is left untouched (position-only correction) — this
-  was confirmed sufficient visually through a full gait cycle, so no
-  explicit ankle-orientation correction was added.
-  `bakeLegIKIntoAnimations(group, skeleton, ikSpace, legs, frameStep)`
-  exists because `GLTF2Export.GLBAsync` only ever serializes each
-  `Animation`'s existing authored keyframes — confirmed by reading
-  `glTFAnimation.js` down to `Animation._interpolate`, it never samples
-  live scene/bone state — so the per-frame IK correction above would
-  silently vanish from any exported GLB without an explicit bake step. It
-  samples every `frameStep` across a clip's full range (called with `1`,
-  i.e. every integer frame), evaluates the live IK solve at each sampled
-  frame, and replaces the hip/knee `rotationQuaternion` channels' keys via
-  `Animation.setKeys` — the same primitive the exporter itself uses
-  internally — returning a restore closure that puts the original keys
-  back. This bakes in-place on the same live `Animation` objects the
-  running app uses for playback, so `main.ts`'s `handleExport` calls it for
-  *every* loaded clip (the manifest lists all of them, not just the one
-  currently selected) inside a `try`/`finally`, restoring original keys and
-  the visible clip's exact frame afterward regardless of whether export
-  succeeds — confirmed the live app is left completely undisturbed by
-  exporting (customization and playback both continue exactly as before).
+  and before any body-shape edit, recording each foot's (`LeftToeBase`/
+  `RightToeBase` — the actual ground-contact point, not the ankle) world-Y
+  height as an offset from `baseRootY` (`character.rootNode.position.y`,
+  captured once at load), normalized to Size 1 — the fixed reference every
+  subsequent leg-length customization's correction is measured against,
+  independent of which clip is later selected. Reads via plain
+  `TransformNode.computeWorldMatrix(true)`/`.getAbsolutePosition()` — no
+  `Bone`-level API involved at all, so no bind-space bridging or
+  mirrored-root workaround is needed anywhere in this module (contrast
+  with the removed IK version's `ikSpace`, below). **`AnimationGroup.goToFrame`
+  is a no-op until the group has been started at least once** (confirmed
+  by reading `animationGroup.pure.js`: `if (!this._isStarted) return
+  this;`) — still relevant here since baseline capture still scrubs frames
+  via `goToFrame` before any group has played, so `captureFootHeightBaseline`
+  still calls `group.play(false)` first.
+  `sampleFootHeightBaseline(samples, frame)` linearly interpolates between
+  the two bracketing samples for a live (continuous) playback frame.
+  `applyGroundOffset(rootNode, leftFootNode, rightFootNode, baseRootY,
+  baselineSample, sizeValue)` is the per-frame correction: resets
+  `rootNode.position.y` to `baseRootY` first (so the "current" foot-height
+  reading isn't contaminated by whatever offset was applied last frame —
+  avoids a feedback loop), measures both feet's actual world-Y height,
+  compares each against its own baseline (scaled by `sizeValue`), and sets
+  `rootNode.position.y = baseRootY + max(deltaLeft, deltaRight)` — the
+  same worst-case-across-both-feet principle the pre-rewrite
+  `groundOffsetAtSize1` system already established (left and right legs
+  are roughly out of phase during locomotion, so each foot's worst drop
+  happens at a different frame; taking the max guarantees neither foot
+  clips through the ground, at the cost of the other foot occasionally
+  sitting slightly above its own baseline instead). Wired into `main.ts`'s
+  `onBeforeRenderObservable`, gated on the same "legs actually customized"
+  check as before (see below) — with nothing customized,
+  `rootNode.position.y` simply stays at `baseRootY`, untouched.
+  No baking or export-time handling of any kind is needed: unlike the
+  removed IK version (which had to bake corrected rotation into every
+  clip's keyframes before export, since `GLTF2Export.GLBAsync` only
+  serializes each `Animation`'s existing authored keys and never samples
+  live scene state), `rootNode.position.y` is a plain, non-animated static
+  node property — it exports faithfully the same way `rootNode.scaling`
+  (Size) already does, with no special-casing at all.
+  **History, since the reasoning behind removing IK is worth keeping**:
+  the original `legIK.ts` used `BoneIKController` (chosen to reuse a
+  shipped, tested two-bone solver rather than hand-roll law-of-cosines) to
+  bend the knee toward a fixed ankle target captured once per clip. Two
+  real, non-obvious bugs were found and fixed along the way — `BoneIKController`
+  auto-detects "handedness" from a bone matrix determinant and picked the
+  wrong default `bendAxis` for this rig (Babylon scenes are left-handed by
+  default; the auto-detected axis assumed right-handed, hyperextending the
+  knee), and separately its computed thigh orientation came out rolled
+  ~90° from correct, needing an explicit `poleAngle` correction — both
+  found by comparing every candidate axis/angle from a fixed camera angle,
+  paused mid-gait. A third fix gated the whole IK solve on the leg chain
+  actually being customized, since running it unconditionally replaced an
+  already-correct authored rotation with an approximate reconstruction
+  even when nothing needed correcting. All three fixes were real and
+  necessary for what IK was doing, but a fourth user report (legs leaning,
+  body not gaining height when lengthened) exposed that the underlying
+  *design* — reach a fixed target, express all length change as knee bend
+  — was wrong from the start, which is what led to removing IK entirely
+  rather than continuing to calibrate it. If a two-bone IK chain is ever
+  needed again on this rig for an actually IK-shaped problem (not this
+  one), expect to rediscover the same `bendAxis`/`poleAngle` calibration
+  need, and a mirrored-root `ikSpace`-style bridging workaround for
+  `BoneIKController`'s non-nullable `mesh` argument (this rig's
+  scene-graph root, `__root__` above `Armature`, carries a mirrored
+  `[1,1,-1]` scale — a Blender FBX→glTF conversion artifact — which
+  corrupts `BoneIKController`'s world-space rotation math if bridged
+  through directly, confirmed empirically: a bone's `.scaling` jumped to
+  `~100`, the exact inverse of the rig's import scale, after a single
+  `.update()` call).
 - `shell/` — the standalone browser app. `index.html` + `main.ts` own the canvas,
   Babylon `Engine`/camera/light, and render loop, wire up spacebar (cycle
   animations) and `E` (toggle helmet) listeners, and call into `core/`.
@@ -466,13 +462,15 @@ second consumer exists yet to justify one):
   actually changes — translation-based length needs no per-frame
   reapplication, same reasoning as Scale's (see `bodyShape.ts` above);
   slider callbacks go through a `setBodyPart` wrapper that reapplies every
-  label (simpler than tracking exactly which labels affect which others)
-  and then unconditionally rebuilds both leg IK chains (`legIK.ts`'s
-  `rebuildLegIKChains` — cheap, and simpler than tracking exactly which
-  labels affect leg length). A Reset button (`main.ts`'s `resetAll`)
-  restores Size, every Body Shape slider, equipment, sun, and animation to
-  their load-time defaults in one step, then also rebuilds both leg IK
-  chains. `panel.resetControls()`
+  label (simpler than tracking exactly which labels affect which others) —
+  ground correction itself needs no rebuilding step of any kind on a slider
+  change (see `legGroundOffset.ts` above), since it reads live bone state
+  fresh every frame rather than caching anything. A Reset button
+  (`main.ts`'s `resetAll`) restores Size, every Body Shape slider,
+  equipment, sun, and animation to their load-time defaults in one step,
+  and also resets `rootNode.position.y` to `baseRootY` directly (since
+  every label reset to default means the ground-correction gate turns off
+  and won't do this on its own). `panel.resetControls()`
   syncs the sliders' visual positions back to 1 without re-triggering
   their input handlers. `main.ts` also triggers
   the actual downloads after calling `exportCharacter` (`gltfData.downloadFiles()`
