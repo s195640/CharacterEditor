@@ -41,6 +41,11 @@
   background: #444;
 }
 
+#control-panel button.active {
+  background: #556b8a;
+  border-color: #7f9bc2;
+}
+
 #control-panel .body-part-label {
   font-size: 12px;
   opacity: 0.85;
