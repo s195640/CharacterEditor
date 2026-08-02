@@ -108,6 +108,28 @@ export function stripScaleAnimations(scene: Scene): void {
   }
 }
 
+// ImportAnimationsAsync's retargeting-by-name still adds a targetedAnimation
+// even when no node on the destination skeleton matches a channel's bone
+// name, leaving `target: null` rather than skipping that channel outright.
+// Harmless as long as every model shares the exact same bone set, but once
+// a clip authored for a LARGER rig is retargeted onto a SMALLER one (e.g.
+// this project's "Skeleton" model has no Thumb/Middle/Ring/Pinky bones, so
+// retargeting the Default model's Walking clip onto it leaves those
+// channels unmatched), starting that group crashes --
+// RuntimeAnimation._preparePath reads `target.position` unconditionally.
+// Confirmed via the exact crash stack: group.play(false) -> AnimationGroup
+// .start -> new RuntimeAnimation -> _preparePath. Call this once, right
+// after every clip for the current model has loaded, before anything plays.
+export function stripUnmatchedTargets(scene: Scene): void {
+  for (const group of scene.animationGroups) {
+    for (const targetedAnimation of [...group.targetedAnimations]) {
+      if (!targetedAnimation.target) {
+        group.removeTargetedAnimation(targetedAnimation.animation);
+      }
+    }
+  }
+}
+
 // Unlike scaling (always a dead constant on every bone), a bone's translation
 // channel is only sometimes dead weight: Hips carries genuine root-motion
 // translation (confirmed by reading Walking.glb's raw keyframe data -- Hips'
@@ -156,12 +178,24 @@ export async function loadEquipment(
   }
   const result = await SceneLoader.ImportMeshAsync("", rootUrl, fileName, scene);
   const meshesWithGeometry = result.meshes.filter((m) => m.getTotalVertices() > 0);
+  const keptMeshes = new Set(meshesWithGeometry);
   for (const mesh of meshesWithGeometry) {
     mesh.skeleton = targetSkeleton;
     mesh.parent = parentNode;
   }
   for (const skeleton of result.skeletons) {
     skeleton.dispose();
+  }
+  // meshesWithGeometry were just reparented directly onto parentNode,
+  // bypassing the loaded file's own hierarchy entirely -- everything else
+  // it brought in (its synthetic zero-vertex root/container nodes) is now
+  // unused. Harmless to leave behind on a single page load, but this
+  // function can run repeatedly (model hot-swapping reloads equipment each
+  // time), so an un-disposed orphan here becomes a real, compounding leak.
+  for (const mesh of result.meshes) {
+    if (!keptMeshes.has(mesh)) {
+      mesh.dispose();
+    }
   }
   return meshesWithGeometry;
 }
@@ -204,6 +238,19 @@ export async function loadProp(
   mesh.rotationQuaternion = null;
   mesh.rotation.copyFrom(rotationOffset);
   mesh.scaling.set(1 / parentScaling.x, 1 / parentScaling.y, 1 / parentScaling.z);
+  // mesh is reparented onto boneNode BEFORE disposing the rest of the loaded
+  // file's hierarchy below -- disposing while mesh was still a child of the
+  // loaded root would cascade-dispose it too, since Node.dispose() recurses
+  // into children by default.
   mesh.parent = boneNode;
+  // Same reasoning as loadEquipment: everything else this file brought in
+  // (its own zero-vertex root/container nodes) is now unused, and would
+  // otherwise leak on every repeated load (model hot-swapping reloads props
+  // each time).
+  for (const otherMesh of result.meshes) {
+    if (otherMesh !== mesh) {
+      otherMesh.dispose();
+    }
+  }
   return mesh;
 }

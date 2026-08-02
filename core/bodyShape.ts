@@ -12,6 +12,16 @@ export function getBoneNode(skeleton: Skeleton, boneName: string): TransformNode
   return boneNode;
 }
 
+// Non-throwing counterpart to getBoneNode, for callers that need to check
+// whether a bone exists on a given rig rather than assume it does -- e.g.
+// filtering BODY_PART_CONFIG down to the labels a smaller-bone-count model
+// (fewer fingers, etc.) actually supports, before calling getBoneNode/
+// captureRestTranslations/translateBodyPart on it.
+export function hasBoneNode(skeleton: Skeleton, boneName: string): boolean {
+  const bone = skeleton.bones.find((b) => b.name === boneName);
+  return bone !== undefined && bone.getTransformNode() !== null;
+}
+
 // Scales a group of bones to reshape a body part. Y is the bone-length axis
 // and X/Z are width for every bone checked in this rig (arms, legs, spine,
 // neck/head) -- confirmed by inspecting each bone's local translation
