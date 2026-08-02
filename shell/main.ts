@@ -8,7 +8,6 @@ import {
   Scene,
   ShadowGenerator,
   StandardMaterial,
-  TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import type { AbstractMesh } from "@babylonjs/core";
@@ -25,15 +24,12 @@ import { AnimationController } from "../core/animationController";
 import { captureRestTranslations, getBoneNode, scaleBodyPart, translateBodyPart } from "../core/bodyShape";
 import { exportCharacter } from "../core/exporter";
 import {
-  bakeLegIKIntoAnimations,
-  captureLegBaseline,
-  createLegIKChain,
-  type LegBaselineSample,
-  sampleLegBaseline,
-  syncBonesFromLinkedTransformNodes,
-  updateLegIK,
-} from "../core/legIK";
-import type { AnimationGroup, BoneIKController } from "@babylonjs/core";
+  applyGroundOffset,
+  captureFootHeightBaseline,
+  type FootHeightBaselineSample,
+  sampleFootHeightBaseline,
+} from "../core/legGroundOffset";
+import type { AnimationGroup } from "@babylonjs/core";
 import { createControlPanel } from "./ui";
 
 function downloadJson(filename: string, data: unknown): void {
@@ -273,85 +269,34 @@ async function main() {
     throw new Error("Character mesh with a skeleton not found");
   }
 
-  // Real IK foot-locking (see docs/other/PLAN_translation_based_body_shape.MD,
-  // Phase 4), replacing the old root-offset ground-height hack, which only
-  // ever sampled against whichever clip happened to be selected when a
-  // slider moved. Baseline capture happens once per clip, right here
+  // Ground-height correction (see docs/other/PLAN_translation_based_body_shape.MD's
+  // 0.6.31 post-merge fix entry): lengthening a leg (translation-based,
+  // see bodyShape.ts) naturally pushes the foot further from the hip in
+  // whatever direction that segment currently points, since rotation is
+  // never touched -- this is what makes the character read as taller with
+  // longer legs, rather than converting the extra length into a different
+  // knee bend (which an earlier real-IK approach was found to do instead,
+  // and which also produced an unrelated leaning artifact at extreme
+  // values -- both symptoms of solving the wrong problem, not a
+  // calibration issue, so real IK was removed entirely rather than
+  // recalibrated). Baseline capture happens once per clip, right here
   // before playback starts and before any body-shape edit is ever applied,
-  // recording "where the authored animation puts the ankle/knee" at the
-  // character's default proportions -- the fixed target every subsequent
-  // leg-length customization gets IK-solved against, independent of which
-  // clip is later selected for playback.
-  //
-  // ikSpace is an inert, never-parented, identity-transform reference node
-  // -- required as BoneIKController's non-nullable "mesh" constructor
-  // argument, but deliberately NOT the real character mesh. This rig's
-  // scene-graph root ("__root__", above "Armature") carries a mirrored
-  // ([1,1,-1]) scale (a Blender FBX-to-glTF conversion artifact), and
-  // bridging bone-space through that real, mirrored mesh corrupts
-  // BoneIKController's world-space rotation math: confirmed empirically
-  // that a single controller.update() call left a bone's .scaling at
-  // ~100 (the exact inverse of the rig's ~0.01 import scale) instead of
-  // its correct 1, producing a fully collapsed leg. Bridging through this
-  // identity node instead keeps every position in one consistent
-  // (unscaled, un-mirrored) skeleton-space, confirmed to leave bone
-  // scaling untouched and a no-op target exactly in place.
-  const ikSpace = new TransformNode("ikSpace", scene);
-  const IK_BASELINE_SAMPLE_COUNT = 120;
+  // recording where the authored animation actually plants each foot at
+  // the character's default proportions -- the fixed reference every
+  // subsequent leg-length customization's ground correction is measured
+  // against, independent of which clip is later selected for playback.
   const skeleton = character.skeletons[0];
-  const leftUpLegBone = skeleton.bones.find((b) => b.name === "mixamorig:LeftUpLeg");
-  const rightUpLegBone = skeleton.bones.find((b) => b.name === "mixamorig:RightUpLeg");
-  const leftLegBone = skeleton.bones.find((b) => b.name === "mixamorig:LeftLeg");
-  const rightLegBone = skeleton.bones.find((b) => b.name === "mixamorig:RightLeg");
-  const leftFootBone = skeleton.bones.find((b) => b.name === "mixamorig:LeftFoot");
-  const rightFootBone = skeleton.bones.find((b) => b.name === "mixamorig:RightFoot");
-  if (
-    !leftUpLegBone ||
-    !rightUpLegBone ||
-    !leftLegBone ||
-    !rightLegBone ||
-    !leftFootBone ||
-    !rightFootBone
-  ) {
-    throw new Error("Leg bones not found for IK setup");
-  }
-  const legBaselines = new Map<
-    AnimationGroup,
-    { left: LegBaselineSample[]; right: LegBaselineSample[] }
-  >();
+  const leftToeBaseNode = getBoneNode(skeleton, "mixamorig:LeftToeBase");
+  const rightToeBaseNode = getBoneNode(skeleton, "mixamorig:RightToeBase");
+  const baseRootY = character.rootNode.position.y;
+  const GROUND_OFFSET_SAMPLE_COUNT = 120;
+  const footHeightBaselines = new Map<AnimationGroup, FootHeightBaselineSample[]>();
   for (const group of scene.animationGroups) {
-    legBaselines.set(group, {
-      left: captureLegBaseline(
-        group,
-        skeleton,
-        ikSpace,
-        leftUpLegBone,
-        leftLegBone,
-        leftFootBone,
-        IK_BASELINE_SAMPLE_COUNT,
-      ),
-      right: captureLegBaseline(
-        group,
-        skeleton,
-        ikSpace,
-        rightUpLegBone,
-        rightLegBone,
-        rightFootBone,
-        IK_BASELINE_SAMPLE_COUNT,
-      ),
-    });
+    footHeightBaselines.set(
+      group,
+      captureFootHeightBaseline(group, leftToeBaseNode, rightToeBaseNode, baseRootY, GROUND_OFFSET_SAMPLE_COUNT),
+    );
   }
-
-  // BoneIKController measures bone lengths once at construction, so it's
-  // rebuilt (not mutated) whenever Upper Leg or Lower Leg's translation-
-  // based length changes -- see setBodyPart/resetAll below.
-  let leftLegIK: BoneIKController = createLegIKChain(ikSpace, leftLegBone);
-  let rightLegIK: BoneIKController = createLegIKChain(ikSpace, rightLegBone);
-  const rebuildLegIKChains = () => {
-    syncBonesFromLinkedTransformNodes(skeleton);
-    leftLegIK = createLegIKChain(ikSpace, leftLegBone);
-    rightLegIK = createLegIKChain(ikSpace, rightLegBone);
-  };
 
   animationController.play();
 
@@ -414,12 +359,10 @@ async function main() {
   const bodyPartState = Object.fromEntries(
     Object.keys(BODY_PART_CONFIG).map((label) => [label, 1]),
   );
-  // Gates whether leg IK needs to run at all -- see onBeforeRenderObservable
-  // and handleExport below. A customization to EITHER segment requires IK
-  // to keep that leg's foot grounded, since one BoneIKController solves
-  // both bones of a side together, not independently. Both legs share the
-  // same bodyPartState values (no separate left/right customization
-  // exists), so one shared check gates both.
+  // Gates whether ground correction needs to run at all -- see
+  // onBeforeRenderObservable below. Both legs share the same
+  // bodyPartState values (no separate left/right customization exists),
+  // so one shared check covers both.
   const legsAreCustomized = () => bodyPartState["Upper Leg"] !== 1 || bodyPartState["Lower Leg"] !== 1;
   const applyBodyPart = (label: string) => {
     const config = BODY_PART_CONFIG[label];
@@ -456,11 +399,6 @@ async function main() {
     for (const otherLabel of Object.keys(BODY_PART_CONFIG)) {
       applyBodyPart(otherLabel);
     }
-    // Rebuilding unconditionally (not just for Upper/Lower Leg) mirrors the
-    // existing "reapply every label" choice above -- simpler than tracking
-    // exactly which labels affect leg length, and cheap (bone position
-    // reads, no rendering).
-    rebuildLegIKChains();
   };
 
   // Body-shape scaling no longer needs reapplying every frame: the
@@ -480,31 +418,24 @@ async function main() {
     stopOrphanedAnimatables(scene);
     panel.setFrameNumber(animationController.getCurrentFrame());
 
-    // Real per-frame IK foot-locking. Must sync bone state FROM the
-    // linked TransformNodes ourselves first: Skeleton.prepare() (which
-    // normally does this) doesn't run until later in the frame, during
-    // mesh rendering -- after this observable -- so without this, the IK
-    // solve below would read last frame's stale hip/knee positions rather
-    // than this frame's already-evaluated animation (see legIK.ts).
-    syncBonesFromLinkedTransformNodes(skeleton);
-    // Only actually solve IK when the leg chain is customized. With
-    // nothing customized, the authored rotation the sync above just put on
-    // the bone IS already exactly correct -- running IK unconditionally
-    // instead replaced it every frame with BoneIKController's law-of-cosines
-    // RECONSTRUCTION, calibrated by eye against a handful of sampled frames
-    // (bendAxis/poleAngle), which is not proven exact for every frame of
-    // every clip (a real leg's knee/hip twist varies across a gait cycle in
-    // ways a single constant can't fully reproduce) -- confirmed as the
-    // cause of a persistent, real deviation from the original animation
-    // even at default proportions, not a calibration-precision problem to
-    // chase further.
+    // Only actually apply ground correction when the leg chain is
+    // customized. With nothing customized, the foot is already exactly
+    // where the authored animation puts it -- there's nothing to correct,
+    // and rootNode.position.y stays at baseRootY untouched (see
+    // resetAll/setSize, which are the only other things that ever move it).
     if (legsAreCustomized()) {
       const group = animationController.getCurrentGroup();
-      const baseline = group ? legBaselines.get(group) : undefined;
+      const baseline = group ? footHeightBaselines.get(group) : undefined;
       if (group && baseline) {
         const frame = group.getCurrentFrame();
-        updateLegIK(leftLegIK, ikSpace, leftUpLegBone, sampleLegBaseline(baseline.left, frame));
-        updateLegIK(rightLegIK, ikSpace, rightUpLegBone, sampleLegBaseline(baseline.right, frame));
+        applyGroundOffset(
+          character.rootNode,
+          leftToeBaseNode,
+          rightToeBaseNode,
+          baseRootY,
+          sampleFootHeightBaseline(baseline, frame),
+          sizeValue,
+        );
       }
     }
   });
@@ -516,7 +447,10 @@ async function main() {
       bodyPartState[label] = 1;
       applyBodyPart(label);
     }
-    rebuildLegIKChains();
+    // legsAreCustomized() is false once every label's reset above, so
+    // onBeforeRenderObservable's ground-correction block won't run to put
+    // this back -- reset it directly instead.
+    character.rootNode.position.y = baseRootY;
     setSize(1);
     equippables.forEach((item) => setEquippableState(item, false));
     setSunEnabled(true);
@@ -526,57 +460,21 @@ async function main() {
     panel.resetControls();
   };
 
-  // GLTF2Export only ever serializes each Animation's existing authored
-  // keyframes -- it never samples live scene/bone state (confirmed by
-  // reading glTFAnimation.js down to Animation._interpolate) -- so
-  // per-frame IK correction would silently vanish from the export unless
-  // it's explicitly baked into each clip's hip/knee rotation channels
-  // first. Bakes every clip (not just the one currently selected/visible),
-  // since the exported manifest lists every loaded animation, then
-  // restores the original (pre-bake) keys and the visible clip's exact
-  // frame in a finally block, so live in-app playback is unaffected by the
-  // moment the export finishes -- baking happens in-place on the same
-  // live Animation objects the running app itself uses for playback.
-  const IK_BAKE_FRAME_STEP = 1;
+  // No special export handling needed for ground correction: unlike the
+  // rotation-based IK this replaced, nothing here ever touches an animated
+  // channel -- rootNode.position.y is a plain, non-animated static node
+  // property (the same as rootNode.scaling already is for Size), already
+  // set correctly by the live per-frame correction above at the moment
+  // export runs, so it exports faithfully with no baking step required.
   const handleExport = async () => {
-    const selectedGroup = animationController.getCurrentGroup();
-    const originalFrame = selectedGroup?.getCurrentFrame();
-
-    // Skip baking entirely when legs aren't customized: the authored
-    // rotation is already exactly correct, so there's nothing to correct,
-    // and baking would write unnecessary (and only approximately correct)
-    // keys into the export for no reason -- keeps exported behavior
-    // consistent with the live preview, which skips IK the same way.
-    const restoreBakedAnimations = legsAreCustomized()
-      ? [...legBaselines.entries()].map(([group, baseline]) =>
-          bakeLegIKIntoAnimations(
-            group,
-            skeleton,
-            ikSpace,
-            [
-              { hipBone: leftUpLegBone, kneeBone: leftLegBone, controller: leftLegIK, baseline: baseline.left },
-              { hipBone: rightUpLegBone, kneeBone: rightLegBone, controller: rightLegIK, baseline: baseline.right },
-            ],
-            IK_BAKE_FRAME_STEP,
-          ),
-        )
-      : [];
-
-    try {
-      const result = await exportCharacter(scene, {
-        sourceCharacter: CHARACTER_FILE,
-        equippedItems: equippables.filter((item) => item.equipped).map((item) => item.label),
-        shouldExportNode: (node) =>
-          !equippables.some((item) => !item.equipped && item.meshes.some((mesh) => mesh === node)),
-      });
-      result.gltfData.downloadFiles();
-      downloadJson("character.manifest.json", result.manifest);
-    } finally {
-      restoreBakedAnimations.forEach((restore) => restore());
-      if (selectedGroup && originalFrame !== undefined) {
-        selectedGroup.goToFrame(originalFrame);
-      }
-    }
+    const result = await exportCharacter(scene, {
+      sourceCharacter: CHARACTER_FILE,
+      equippedItems: equippables.filter((item) => item.equipped).map((item) => item.label),
+      shouldExportNode: (node) =>
+        !equippables.some((item) => !item.equipped && item.meshes.some((mesh) => mesh === node)),
+    });
+    result.gltfData.downloadFiles();
+    downloadJson("character.manifest.json", result.manifest);
   };
 
   const panel = createControlPanel({
